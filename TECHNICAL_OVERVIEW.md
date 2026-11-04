@@ -553,3 +553,29 @@ UI 不显示 2x 不代表失败，判断依据是播放行为和 LSPosed 日志�
 3. **实验证据**：在哪台设备、哪个 versionCode 上看到什么行为和日志。
 
 不要把一次探针命中直接写成永久事实，也不要让 README、维护技能和本文出现互相冲突的版本结论。
+
+
+## 阅读 App TTVideoEngine 适配（2026-11-04，1.2.22）
+
+`MainHook` 对 `com.kylin.read` / `com.phoenix.read` 分派到独立 `ReaderVideoHook`，支持子进程与 `Application.attach` 重试。SDK 方法签名来自设备 APK DEX：`setPlaybackParams(com.ss.ttm.player.PlaybackParams)`、`prepare/play/start`；补充 Surface 方法、媒体来源设置与具体 listener 类的 `onPrepared/onRenderStart/onPlaybackStateChanged`。以 Method 去重，避免加载和 attach 重复 Hook。
+
+Surface 建立后立即及 250/750ms 补设；影片来源更新会清除上一集临时速度并标记初始化阶段，首帧之前的非 1x 速度仍视为初始化，首帧后才保留临时非默认调速。补设只修改原 PlaybackParams 的 speed，保留音高等其他字段。没有视频 Surface 的实例不改速。ThreadLocal 防重入，WeakHashMap 保存实例状态；release / detach / 新来源会清理对应重试与采样状态。
+
+`rateProbe` 在每次首帧后最多一次，对比约 2 秒的 `getCurrentPlaybackTime` 与 `elapsedRealtime` 差值。日志包括 mediaMs、wallMs、ratio、expected；仅供诊断，缓冲、暂停、seek、快速换集都会影响样本。共享 SDK 的广告视频可能命中，纯音频与其他版本仍需单独验证。
+
+配置根因：设备的真实文件位于 `/data/misc/apexdata/<framework-id>/prefs/io.github.MarsGao.speed/speed.xml`，设置值 3.0、权限 660；Phoenix 的 `XSharedPreferences.getFile()` 指向正确位置，却 `readable=false`。旧设置页只调整经典 dataDir/shared_prefs 路径。`SpeedPreferences.open` 按 LSPosed 新偏好 API 尝试 `MODE_WORLD_READABLE`，平台拒绝时回退私有模式；设置页在初始化及 commit 后，通过当前偏好实例的 mFile 修正实际 speed.xml 的可读性。方法只接受文件名 speed.xml，不处理其他偏好文件；公开这个单一浮点设置已取得使用者明确同意。LSPosed 官方说明：https://github.com/LSPosed/LSPosed/wiki/New-XSharedPreferences 。
+
+两包调用 `useReaderPreferences()` 后优先 reload 并读取有效的 LSPosed 偏好，避免被过滤或排队的跨 App 查询。读取失败仍保留原 Provider / 旧偏好回退。其他 App 维持 Provider 优先；全局范围校验与 getSpeedChanged 逻辑保持原契约。attach 早期 Application context 尚未就绪时保留 base context，增加去重读取失败与一次性文件路径诊断。
+
+固定 3x 对照证明换集 Hook 可维持倍速；修正偏好可读性后，正常设置也通过使用者验证。HMA 配置未修改，不能把规则存在当成换集失效的充分因果证据。实验性广播、私有 Provider、固定速度都已清除，最终无新增 exported receiver。
+
+1.2.22 已覆盖安装；使用者确认 Phoenix 在 2x / 3x 下续播与换集均正常，Kylin 第一支与下一支正常。样本有 Phoenix 1.96/2.01/3.00、Kylin 3.00/2.98，仍保留较低的瞬态样本，不能将每个短样本当成稳定倍速保证。两包 Hook 各 34 项，配置/文件兼容性 20 项，共 88 项 JVM 替身检查；不是 Android instrumentation。详见设备证据及更新摘要。
+
+
+## 抖音动态默认值与变更检测（2026-11-04，1.2.23）
+
+当前设备抖音 33.9.0 切视频时会命中 SimPlayer.setSpeed，但旧 prepare/resume 刷新路径没有可靠覆盖，进程缓存会维持启动时速度。`DouyinSpeedState` 分开保存上次模块配置与当前选择，每次 setSpeed / prepare / resume 都读取最新配置；配置改变则使用新默认值，配置未变则保留原生手动选择。现有手动调用栈判据和 TTPlayer legacy 回退保留，仅修正相关堆栈索引边界。
+
+`SpeedConfigBridge.hasSpeedChanged` 比较两次检查读到的实际速度值，不再以 XSharedPreferences.hasFileChanged 作为回退依据，防止别的 getSpeed/reload 先消费文件时间戳而漏报变更。getSpeed 的 Provider 优先策略及两个阅读 App 的可读偏好优先策略维持原状。
+
+使用者确认同一个抖音进程内，设置修改后下一支视频会跟随；日志保存同 PID 的不同设速值。没有额外的抖音播放进度计时，其他抖音变体、原生手动速度的完整设备回归仍需后续覆盖。最终共 101 项 JVM 检查（Douyin 10、配置与文件相容性 23、两包 Hook 各 34），lint 0 errors / 20 warnings。

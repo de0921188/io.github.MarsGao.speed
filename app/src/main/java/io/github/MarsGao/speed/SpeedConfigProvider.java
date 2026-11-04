@@ -30,7 +30,7 @@ public class SpeedConfigProvider extends ContentProvider {
         if (!PATH_SPEED.equals(uri.getLastPathSegment())) {
             throw new IllegalArgumentException("Unsupported URI: " + uri);
         }
-        SharedPreferences prefs = getContext().getSharedPreferences("speed", 0);
+        SharedPreferences prefs = SpeedPreferences.open(getContext());
         float speed = prefs.getFloat(COLUMN_SPEED, DEFAULT_SPEED);
         if (!Float.isFinite(speed) || speed < MIN_SPEED || speed > MAX_SPEED) {
             speed = DEFAULT_SPEED;

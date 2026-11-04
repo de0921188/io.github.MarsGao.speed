@@ -23,7 +23,7 @@ public class MainActivity extends Activity {
         final EditText et = findViewById(R.id.editTextText);
         final Button button = findViewById(R.id.button);
 
-        prefs = this.getSharedPreferences("speed", Context.MODE_PRIVATE);
+        prefs = SpeedPreferences.open(this);
         if (!prefs.contains("speed")) {
             prefs.edit().putFloat("speed", 1.5f).commit();
         }
@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
     }
 
     private void makePrefsReadable() {
+        SpeedPreferences.makeSpeedFileReadable(prefs);
         File dataDir = new File(getApplicationInfo().dataDir);
         dataDir.setReadable(false, false);
         dataDir.setReadable(true, true);

@@ -34,6 +34,25 @@
 - 🎯 区分自动播放和手动设置
 - 🔧 易于使用的设置界面
 
+## 抖音设置更新修复（1.2.23）
+
+修复 `com.ss.android.ugc.aweme` 修改模块倍速后，下一支影片仍沿用旧值的问题。原实现只在 prepare/resume 刷新缓存，而当前抖音切片路径主要触发 setSpeed；现在每次设速都会检查配置值，模块默认值未变时仍保留原生临时手动选择。共用配置变更检测改为独立比较实际值，避免 reload 消耗文件变更标记。
+
+2026-11-04 抖音 `33.9.0` / `330901`、VideoSpeed `1.2.23` 已由使用者确认：不重启抖音，修改设置后滑下一支会正常跟随；同 PID 日志也记录速度变化。Debug 编译、lint（0 errors / 20 warnings）与 101 项 JVM 检查通过。两个阅读 App 的 Hook 未改，68 项相关检查继续通过。证据见 `docs/DOUYIN_DEVICE_EVIDENCE_20261104.txt`。最新 APK：`artifacts/VideoSpeed_1.2.23.apk`。
+
+## 阅读 App 视频倍速（1.2.22）
+
+新增 `com.kylin.read`、`com.phoenix.read` 的 TTVideoEngine 适配、LSPosed 推荐作用域与包可见性声明，沿用全局 `0.25x ~ 4.0x` 设置。设备 APK 基线分别为 `7.2.5.32`、`6.5.1.32`。
+
+- 覆盖首次播放、左下「继续观看」、预载下一集及连续换集：播放入口、Surface 建立后补设、影片来源更新、准备完成与首帧回调共同触发。换集初始化不再沿用上一集临时速度；开始渲染后保留当集临时非默认调速。
+- 两包优先读取 LSPosed 的 XSharedPreferences。修正设置页只处理旧路径的问题：以框架支持的 `MODE_WORLD_READABLE` 打开单一 `speed` 偏好，并处理实际 `mFile` 指向的 `speed.xml`；非 LSPosed 平台拒绝此模式时回退私有模式。此文件只有倍速浮点数，其他 App 可读该数值；设备测试已取得使用者明确同意。
+- 其他 App 保留原 Provider 优先及 XSharedPreferences 回退；未修改 HMA 规则。实验性广播接收器、私有 Provider 与固定 3x 对照代码均已移除。
+- 只调整有视频 Surface 的实例，保留原参数与音高。每次首帧后最多一次 `rateProbe` 比对进度与实际时间，缓冲、暂停、seek 会影响样本；不会据此自动宣告通过。
+- 2026-11-04 使用者确认 Phoenix 正常设置 `2x/3x` 均能跟随且连续换集正常，Kylin 第一支与下一支正常。日志有 Phoenix 约 `1.96x/2.01x/3.00x`、Kylin 约 `3.00x/2.98x` 的进度样本，也保留换集期间较低样本。
+- Debug 编译、lint（0 errors / 20 warnings）、88 项 JVM 检查通过。未推送 GitHub，保留设备数据。跨手机、目标 App 后续版本、整机重启及纯音频听书仍需额外回归。
+
+本机检查：设置 `JAVA_HOME` 后运行 `python -B scripts/test_reader_video_hook.py`、`python -B scripts/test_speed_config_bridge.py`。交付 APK 为 `artifacts/VideoSpeed_1.2.22.apk`，证据与完整边界见 `docs/READER_DEVICE_EVIDENCE_20261104.txt`、`UPDATE_SUMMARY_20261104_161718.md`。
+
 ## 📱 支持版本
 
 `1.2.12` 补充作者视频列表页 `FinderProfileTimeLineUI` 的默认倍速触发，覆盖作者页选视频与上下滑动；作者视频页滑动后在 450ms、1200ms 两次尝试定位当前播放器，日志包含实际页面名。

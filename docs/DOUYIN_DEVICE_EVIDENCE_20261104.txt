@@ -1,0 +1,13 @@
+VideoSpeed 1.2.23 / 1002023; Douyin com.ss.android.ugc.aweme 33.9.0 / 330901
+User confirmed changing default then swiping to next video works without restarting Douyin.
+Same-process setSpeed values below are actual observations; user chose additional values during testing.
+Method calls plus user visual confirmation; no separate playhead timing performed for Douyin.
+
+11-04 20:35:40.552 31876 30491 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-208a-a,0,1] douyin setSpeed2: 2.1
+11-04 20:35:40.568 31876 31876 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-2-b,0,1] douyin setSpeed2: 2.1
+11-04 20:35:40.570 31876 31876 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-2-c,0,1] douyin setSpeed2: 2.1
+11-04 20:35:40.572 31876 31876 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-2-d,0,1] douyin setSpeed2: 2.1
+11-04 20:35:48.037 31876 30491 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-208a-e,0,1] douyin setSpeed2: 2.1
+11-04 20:35:48.056 31876 31876 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-2-f,0,1] douyin setSpeed2: 2.1
+11-04 20:35:48.057 31876 31876 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-2-10,0,1] douyin setSpeed2: 2.1
+11-04 20:35:48.058 31876 31876 I LSPosedFramework: (com.ss.android.ugc.aweme)[io.github.MarsGao.speed,XposedBridge,7c84-1a1a68e1a00-2-11,0,1] douyin setSpeed2: 2.1
