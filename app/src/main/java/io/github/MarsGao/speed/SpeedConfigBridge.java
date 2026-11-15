@@ -11,6 +11,16 @@ final class SpeedConfigBridge {
     private static final float MIN_SPEED = 0.25f;
     private static final float MAX_SPEED = 4.0f;
     private static volatile Context applicationContext;
+    private static volatile String targetPackage;
+
+    static synchronized void setTargetPackage(String packageName) {
+        String next = SpeedSettings.isPackageName(packageName) ? packageName : null;
+        if (!java.util.Objects.equals(targetPackage, next)) {
+            targetPackage = next;
+            lastProviderSpeed = null;
+            lastSource = null;
+        }
+    }
     private static volatile Float lastProviderSpeed;
     private static volatile String lastSource;
     private static volatile String lastProviderFailure;
@@ -44,7 +54,7 @@ final class SpeedConfigBridge {
         if (readerProcess) {
             legacyPrefs.reload();
             logLegacyFile(legacyPrefs);
-            float stored = legacyPrefs.getFloat("speed", Float.NaN);
+            float stored = SpeedSettings.resolve(legacyPrefs::getFloat, targetPackage, Float.NaN);
             if (isValidSpeed(stored)) {
                 logSource("XSharedPreferences reader");
                 return stored;
@@ -57,7 +67,7 @@ final class SpeedConfigBridge {
         legacyPrefs.reload();
         logLegacyFile(legacyPrefs);
         logSource("XSharedPreferences fallback");
-        return sanitizeSpeed(legacyPrefs.getFloat("speed", fallback), fallback);
+        return SpeedSettings.resolve(legacyPrefs::getFloat, targetPackage, fallback);
     }
 
     static synchronized boolean hasSpeedChanged(XSharedPreferences legacyPrefs) {
@@ -74,7 +84,7 @@ final class SpeedConfigBridge {
             return null;
         }
         try (Cursor cursor = context.getContentResolver().query(
-                SpeedConfigProvider.SPEED_URI,
+                SpeedConfigProvider.uriForPackage(targetPackage),
                 new String[]{SpeedConfigProvider.COLUMN_SPEED},
                 null,
                 null,
@@ -96,10 +106,6 @@ final class SpeedConfigBridge {
             logSource("XSharedPreferences fallback");
         }
         return null;
-    }
-
-    private static float sanitizeSpeed(float speed, float fallback) {
-        return isValidSpeed(speed) ? speed : fallback;
     }
 
     private static boolean isValidSpeed(float speed) {
@@ -129,7 +135,7 @@ final class SpeedConfigBridge {
     private static void logSource(String source) {
         if (!source.equals(lastSource)) {
             lastSource = source;
-            XposedBridge.log("[VideoSpeed] [Config] source=" + source);
+            XposedBridge.log("[VideoSpeed] [Config] source=" + source + ", package=" + targetPackage);
         }
     }
 }

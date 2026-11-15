@@ -12,20 +12,21 @@ public SharedPreferences getSharedPreferences(String name,int mode){calls++;last
 ''',
 'android/content/SharedPreferences.java': 'package android.content;public class SharedPreferences {public java.io.File mFile;}',
 'android/content/ContentResolver.java': '''package android.content;
-public class ContentResolver {public Float speed=3f;public boolean fail;public int queries;
-public android.database.Cursor query(android.net.Uri u,String[] p,String a,String[] b,String c){queries++;if(fail)throw new IllegalStateException("provider failure");if(speed==null)return null;final float value=speed;
+public class ContentResolver {public Float speed=3f;public boolean fail;public int queries;public String lastPackage;
+public java.util.Map<String,Float> perApp=new java.util.HashMap<>();
+public android.database.Cursor query(android.net.Uri u,String[] p,String a,String[] b,String c){queries++;lastPackage=u.packageName;if(fail)throw new IllegalStateException("provider failure");if(speed==null)return null;final float value=perApp.getOrDefault(u.packageName,speed);
 return new android.database.Cursor(){public boolean moveToFirst(){return true;}public float getFloat(int c){return value;}public int getColumnIndexOrThrow(String c){return 0;}public void close(){}};}}
 ''',
 'android/database/Cursor.java': 'package android.database;public interface Cursor extends AutoCloseable {boolean moveToFirst();float getFloat(int c);int getColumnIndexOrThrow(String c);void close();}',
-'android/net/Uri.java': 'package android.net;public class Uri {public static Uri parse(String s){return new Uri();}}',
+'android/net/Uri.java': 'package android.net;public class Uri {public String packageName;public static Uri parse(String s){return new Uri();}}',
 'android/util/Log.java': 'package android.util;public class Log {public static int w(String t,String m){return 0;}public static int w(String t,String m,Throwable e){return 0;}}',
 'de/robv/android/xposed/XSharedPreferences.java': '''package de.robv.android.xposed;
-public class XSharedPreferences {public float speed=1.25f;public boolean stored=true;public int reloads;
-public void reload(){reloads++;}public float getFloat(String k,float f){return stored?speed:f;}
+public class XSharedPreferences {public float speed=1.25f;public boolean stored=true;public int reloads;public java.util.Map<String,Float> perApp=new java.util.HashMap<>();
+public void reload(){reloads++;}public float getFloat(String k,float f){return perApp.containsKey(k)?perApp.get(k):("speed".equals(k)&&stored?speed:f);}
 public boolean hasFileChanged(){return false;}public java.io.File getFile(){return new java.io.File("missing-test-speed.xml");}}
 ''',
 'de/robv/android/xposed/XposedBridge.java': 'package de.robv.android.xposed;public class XposedBridge {public static void log(String s){}}',
-'io/github/MarsGao/speed/SpeedConfigProvider.java': 'package io.github.MarsGao.speed;class SpeedConfigProvider {static final android.net.Uri SPEED_URI=android.net.Uri.parse("content://test/speed");static final String COLUMN_SPEED="speed";}',
+'io/github/MarsGao/speed/SpeedConfigProvider.java': 'package io.github.MarsGao.speed;class SpeedConfigProvider {static final android.net.Uri SPEED_URI=android.net.Uri.parse("content://test/speed");static final String COLUMN_SPEED="speed";static android.net.Uri uriForPackage(String p){android.net.Uri u=android.net.Uri.parse("content://test/speed");u.packageName=p;return u;}}',
 'io/github/MarsGao/speed/BridgeTest.java': '''package io.github.MarsGao.speed;
 import android.content.*;import de.robv.android.xposed.*;
 public class BridgeTest {
@@ -58,6 +59,28 @@ check(app.resolver.queries==queries,"valid reader preference does not issue bloc
 prefs.speed=1.75f;check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.75f,"reader reload follows changed setting");
 prefs.speed=Float.NaN;check(SpeedConfigBridge.getSpeed(prefs,1.5f)==3.5f,"invalid reader setting still tries provider");
 prefs.stored=false;app.resolver.speed=null;check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.5f,"missing reader setting safely falls back");
+prefs.stored=true;prefs.speed=2.2f;
+SpeedConfigBridge.setTargetPackage("com.ss.android.ugc.aweme");
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==2.2f,"old global inherited for target");
+prefs.perApp.put(SpeedSettings.appKey("com.ss.android.ugc.aweme"),1.8f);
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.8f,"legacy reader resolves own override");
+prefs.perApp.put(SpeedSettings.appKey("com.phoenix.read"),3f);prefs.speed=0.8f;
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.8f,"other app and global do not leak into current override");
+SpeedConfigBridge.setTargetPackage("com.phoenix.read");
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==3f,"different target selects different override");
+prefs.perApp.remove(SpeedSettings.appKey("com.phoenix.read"));
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==0.8f,"remove override follows global");
+check(SpeedConfigBridge.hasSpeedChanged(prefs),"target check initialized");
+prefs.perApp.put(SpeedSettings.appKey("com.ss.android.ugc.aweme"),2.5f);
+check(!SpeedConfigBridge.hasSpeedChanged(prefs),"editing other app does not reset current playback choice");
+prefs.perApp.put(SpeedSettings.appKey("com.phoenix.read"),2f);SpeedConfigBridge.getSpeed(prefs,1.5f);
+check(SpeedConfigBridge.hasSpeedChanged(prefs),"own override change detected after reload");
+prefs.stored=false;prefs.perApp.remove(SpeedSettings.appKey("com.phoenix.read"));app.resolver.speed=1.5f;
+app.resolver.perApp.put("com.phoenix.read",1.25f);
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.25f,"provider fallback resolves package-specific result");
+check("com.phoenix.read".equals(app.resolver.lastPackage),"target package attached to provider request");
+SpeedConfigBridge.setTargetPackage(null);
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.5f,"legacy request without package remains global");
 Context module=new Context();check(SpeedPreferences.open(module)==module.prefs&&module.lastMode==1,"request framework-supported world-readable speed preference");
 module.rejectWorld=true;module.calls=0;check(SpeedPreferences.open(module)==module.prefs&&module.lastMode==0&&module.calls==2,"unhooked platform falls back to private mode");
 RecordingFile speed=new RecordingFile("/test/module/speed.xml");module.prefs.mFile=speed;SpeedPreferences.makeSpeedFileReadable(module.prefs);
@@ -78,7 +101,7 @@ def main():
   base=Path(tmp)
   for name,source in SOURCES.items():
    p=base/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(source,encoding='utf8')
-  for name in ('SpeedConfigBridge','SpeedPreferences'):
+  for name in ('SpeedConfigBridge','SpeedPreferences','SpeedSettings'):
    shutil.copyfile(ROOT/f'app/src/main/java/io/github/MarsGao/speed/{name}.java',base/f'io/github/MarsGao/speed/{name}.java')
   subprocess.run([tool('javac'),'--release','11','-d',str(base/'out'),*map(str,base.rglob('*.java'))],check=True)
   subprocess.run([tool('java'),'-cp',str(base/'out'),'io.github.MarsGao.speed.BridgeTest'],check=True)

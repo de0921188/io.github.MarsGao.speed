@@ -17,8 +17,13 @@ public class SpeedConfigProvider extends ContentProvider {
     public static final String COLUMN_SPEED = "speed";
     public static final Uri SPEED_URI = Uri.parse("content://" + AUTHORITY + "/" + PATH_SPEED);
     private static final float DEFAULT_SPEED = 1.5f;
-    private static final float MIN_SPEED = 0.25f;
-    private static final float MAX_SPEED = 4.0f;
+    static final String QUERY_PACKAGE = "package";
+
+    static Uri uriForPackage(String packageName) {
+        return SpeedSettings.isPackageName(packageName)
+                ? SPEED_URI.buildUpon().appendQueryParameter(QUERY_PACKAGE, packageName).build()
+                : SPEED_URI;
+    }
 
     @Override
     public boolean onCreate() {
@@ -31,10 +36,11 @@ public class SpeedConfigProvider extends ContentProvider {
             throw new IllegalArgumentException("Unsupported URI: " + uri);
         }
         SharedPreferences prefs = SpeedPreferences.open(getContext());
-        float speed = prefs.getFloat(COLUMN_SPEED, DEFAULT_SPEED);
-        if (!Float.isFinite(speed) || speed < MIN_SPEED || speed > MAX_SPEED) {
-            speed = DEFAULT_SPEED;
+        String packageName = uri.getQueryParameter(QUERY_PACKAGE);
+        if (packageName != null && !SpeedSettings.isPackageName(packageName)) {
+            throw new IllegalArgumentException("Invalid package name");
         }
+        float speed = SpeedSettings.resolve(prefs::getFloat, packageName, DEFAULT_SPEED);
         MatrixCursor cursor = new MatrixCursor(new String[]{COLUMN_SPEED}, 1);
         cursor.addRow(new Object[]{speed});
         return cursor;

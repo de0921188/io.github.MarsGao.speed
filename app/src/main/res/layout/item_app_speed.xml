@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="80dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+        <TextView
+            android:id="@+id/appName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#ffffff"
+            android:textSize="16sp" />
+        <TextView
+            android:id="@+id/appPackage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="middle"
+            android:maxLines="1"
+            android:textColor="#b0c8cf"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/appSpeedButton"
+        android:layout_width="112dp"
+        android:layout_height="56dp"
+        android:layout_marginStart="12dp"
+        android:background="@drawable/button_bg"
+        android:focusable="false"
+        android:textAllCaps="false"
+        android:textColor="#f4d19e"
+        android:textSize="13sp" />
+</LinearLayout>

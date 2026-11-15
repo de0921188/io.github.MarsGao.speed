@@ -70,6 +70,7 @@ public class MainHook implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) {
         if (ReaderVideoHook.supports(lpparam.packageName)) {
+            SpeedConfigBridge.setTargetPackage(lpparam.packageName);
             SpeedConfigBridge.useReaderPreferences();
             hookApplicationContext();
             ReaderVideoHook.install(lpparam, MainHook::getSpeedConfig);
@@ -117,6 +118,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 return;
         }
         if (bili || twitter || douyin || red || wb || ig || tg || wx) {
+            SpeedConfigBridge.setTargetPackage(lpparam.packageName);
             hookApplicationContext();
             if (twitter) {
                 logTwitter("handleLoadPackage process=" + lpparam.processName);

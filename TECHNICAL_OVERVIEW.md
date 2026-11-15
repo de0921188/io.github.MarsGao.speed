@@ -579,3 +579,16 @@ Surface 建立后立即及 250/750ms 补设；影片来源更新会清除上一�
 `SpeedConfigBridge.hasSpeedChanged` 比较两次检查读到的实际速度值，不再以 XSharedPreferences.hasFileChanged 作为回退依据，防止别的 getSpeed/reload 先消费文件时间戳而漏报变更。getSpeed 的 Provider 优先策略及两个阅读 App 的可读偏好优先策略维持原状。
 
 使用者确认同一个抖音进程内，设置修改后下一支视频会跟随；日志保存同 PID 的不同设速值。没有额外的抖音播放进度计时，其他抖音变体、原生手动速度的完整设备回归仍需后续覆盖。最终共 101 项 JVM 检查（Douyin 10、配置与文件相容性 23、两包 Hook 各 34），lint 0 errors / 20 warnings。
+
+
+## 按应用独立配置（1.2.24）
+
+`SpeedSettings` 统一解析 UI、Provider 与 XSharedPreferences 的配置；原 `speed` 全局浮点值不改，覆写键是 `speed.app.<真实包名>`。没有有效覆写时跟随全局，异常值仍执行 `0.25x ~ 4.0x` 检查并回退。显式独立值即使等于当前全局也仍保持独立，后续全局变化不会覆盖它；重置只删除该应用键。
+
+`MainHook` 在每一个已支持分支调用 `setTargetPackage(lpparam.packageName)`，包括阅读 App 的独立入口。避免使用可能被目标 App 改写的 Context 包名，亦不使用带子进程后缀的 processName。各 Hook 原有 `getSpeedConfig/getWeChatSpeedConfig/hasSpeedConfigChanged` 都经原桥接读到本应用的有效值。
+
+`SpeedConfigBridge` 保留阅读 App 的偏好优先与其他 App 的 Provider 优先策略。Provider URI 新增 `package` 参数；不带参数保持原全局 IPC 契约，响应仍是单列 speed，仍为只读。配置变更检查比较本应用的最终解析值，因此只改其他包名或修改全局但本应用有独立覆写时，不会清除本应用原生手动选择。
+
+`MainActivity` 上方保存全局速度，下方 ListView 支持名称／包名搜索，显示「跟随全局」或「独立设置」与生效速度。点击应用打开编辑对话框，保存仅写一个包名键，「跟随全局」仅移除该键。显示已安装 App 的系统名称，未安装时使用内建标签；可预先配置全部 15 个已支持包名。沿用原同步 commit 与 speed.xml 可读性处理，不添加权限、服务或接收器。
+
+本机检查：SpeedSettings 79 项、配置桥接 34 项、Douyin 状态 10 项、两个阅读 App 各 34 项，共 191 项 JVM 检查。测试覆盖旧全局资料、独立值隔离、移除覆写、同值覆写保持独立、包名／范围校验、Provider 包名路由与独立值变化检测。未进行本版 Android UI、Provider 真机查询或播放验收；此前版本的实播证据不能当成本版新增功能已验收。

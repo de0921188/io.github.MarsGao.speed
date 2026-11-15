@@ -1,8 +1,25 @@
 <resources>
     <string name="app_name">视频调速 VideoSpeed</string>
-    <string name="app_desc">视频默认播放速度调节 Xposed模块</string>
+    <string name="app_desc">视频播放速度调节，支持全局和应用独立设置</string>
     <string name="title_activity_main">视频调速 VideoSpeed</string>
-    <string name="speed_label">默认播放速度</string>
+    <string name="speed_label">全局默认速度</string>
     <string name="speed_hint">0.25–4.0</string>
-    <string name="set_speed">设置</string>
+    <string name="set_speed">保存全局</string>
+    <string name="global_speed_help">未单独设置的应用跟随全局，支持 0.25–4.0x</string>
+    <string name="app_speed_section">应用独立速度 · 点击调整</string>
+    <string name="app_search_hint">搜索应用名称或包名</string>
+    <string name="no_matching_apps">没有匹配的应用</string>
+    <string name="speed_inherit">跟随全局\n%1$sx</string>
+    <string name="speed_custom">独立设置\n%1$sx</string>
+    <string name="edit_app_speed">%1$s 播放速度</string>
+    <string name="app_speed_description">调整 %1$s 的播放速度，当前 %2$s</string>
+    <string name="app_speed_help">保存后仅对此应用生效，下一个视频使用新速度。</string>
+    <string name="use_global">跟随全局</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="invalid_speed">请输入 0.25 到 4.0 之间的有效倍速</string>
+    <string name="save_failed">设置失败，请重试</string>
+    <string name="global_saved">全局速度已保存，下一个视频生效</string>
+    <string name="app_saved">%1$s 已设为 %2$sx，下一个视频生效</string>
+    <string name="app_reset">%1$s 已恢复跟随全局速度</string>
 </resources>
