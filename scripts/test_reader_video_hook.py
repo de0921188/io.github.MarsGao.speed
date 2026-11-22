@@ -258,12 +258,27 @@ pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(2f));
 XposedBridge.before(android.app.Activity.class.getDeclaredMethod("onPause"),full);
 android.os.Handler.runPending();
 check(pressPlayer.last.speed==target,"background during held gesture restores selected speed without UP");
+SpeedConfigBridge.testPolicy=2;
+TTVideoEngine fixed=new TTVideoEngine();
+fixed.setPlaybackParams(new PlaybackParams().setSpeed(1.75f));
+check(fixed.last.speed==target,"fixed policy overrides native menu speed");
+XposedBridge.before(android.app.Activity.class.getMethod("dispatchTouchEvent",android.view.MotionEvent.class),new android.app.Activity(),new android.view.MotionEvent(0));
+fixed.setPlaybackParams(new PlaybackParams().setSpeed(2f));
+check(fixed.last.speed==2f,"fixed policy still allows held temporary boost");
+XposedBridge.before(android.app.Activity.class.getMethod("dispatchTouchEvent",android.view.MotionEvent.class),new android.app.Activity(),new android.view.MotionEvent(1));
+fixed.setPlaybackParams(new PlaybackParams().setSpeed(1f));
+check(fixed.last.speed==target,"fixed policy restores module speed on release");
+SpeedConfigBridge.testPolicy=0;
 System.out.println(args[0]+": "+checks+" checks passed (JVM stubs, not device playback)");
 }
 }''',
 }
 
 def main():
+    import sys
+    sys.path.insert(0,str(ROOT/"scripts"))
+    from test_compat import extend
+    extend(SOURCES)
     java_home = os.environ.get('JAVA_HOME')
     suffix = '.exe' if os.name == 'nt' else ''
     def tool(name):

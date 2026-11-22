@@ -10,6 +10,7 @@ import android.os.RemoteException;
 /** Explicit, short-lived binding fallback when a host cannot acquire our Provider. */
 public class IdleLockService extends Service {
     private static volatile boolean running;
+    static boolean isRunning() { return running; }
     private android.content.BroadcastReceiver receiver;
     private final android.os.Handler recoveryHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable pulse = new Runnable() {
@@ -21,7 +22,7 @@ public class IdleLockService extends Service {
 
     static void sync(android.content.Context context) {
         if (android.os.Build.VERSION.SDK_INT < 34) return;
-        boolean enabled = SpeedSettings.idleEnabled(SpeedPreferences.open(context)::getFloat)
+        boolean enabled = (SpeedSettings.idleEnabled(SpeedPreferences.open(context)::getFloat) || TimerControls.sleeping(context))
                 && IdleLockRoot.active(context);
         IdleLockRecovery.sync(context, enabled);
         Intent intent = new Intent(context, IdleLockService.class);
@@ -41,7 +42,12 @@ public class IdleLockService extends Service {
                 new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
         startForeground(42, new android.app.Notification.Builder(this, "idle_lock")
                 .setSmallIcon(android.R.drawable.ic_lock_idle_lock).setContentTitle(getString(R.string.idle_title))
-                .setContentText(getString(R.string.idle_service_running)).setContentIntent(settings).setOngoing(true).build());
+                .setContentText(getString(R.string.idle_service_running)).setContentIntent(settings)
+                .addAction(0,getString(R.string.notification_pause), android.app.PendingIntent.getBroadcast(this,43,
+                        new Intent(this,TimerActionReceiver.class).setAction("pause"),android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
+                .addAction(0,getString(R.string.notification_resume), android.app.PendingIntent.getBroadcast(this,44,
+                        new Intent(this,TimerActionReceiver.class).setAction("resume"),android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
+                .setOngoing(true).build());
         receiver = new android.content.BroadcastReceiver() {
             @Override public void onReceive(android.content.Context context, Intent intent) {
                 final int uid = IdleLockChannel.senderUid(this);
@@ -60,7 +66,7 @@ public class IdleLockService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!SpeedSettings.idleEnabled(SpeedPreferences.open(this)::getFloat) || !IdleLockRoot.active(this)) {
+        if (!(SpeedSettings.idleEnabled(SpeedPreferences.open(this)::getFloat) || TimerControls.sleeping(this)) || !IdleLockRoot.active(this)) {
             stopSelf();
             IdleLockRecovery.sync(this, false);
             return START_NOT_STICKY;

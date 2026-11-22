@@ -74,6 +74,11 @@
         android:textColor="#f4d19e"
         android:textSize="14sp" />
 
+    <Button android:id="@+id/moduleTools" android:layout_width="match_parent"
+        android:layout_height="48dp" android:layout_marginTop="4dp"
+        android:background="@drawable/button_bg" android:text="@string/module_tools"
+        android:textColor="#f4d19e" android:textSize="14sp" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

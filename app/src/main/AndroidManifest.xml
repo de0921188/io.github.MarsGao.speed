@@ -36,6 +36,8 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".ModuleToolsActivity" android:exported="false" android:label="@string/tools_title" android:theme="@style/NoActionBar" />
+        <receiver android:name=".TimerActionReceiver" android:exported="false" />
         <provider
             android:name=".SpeedConfigProvider"
             android:authorities="io.github.MarsGao.speed.config"

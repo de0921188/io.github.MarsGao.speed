@@ -75,11 +75,20 @@ try{p.insert(global,new ContentValues());throw new AssertionError();}catch(Unsup
 try{p.delete(global,null,null);throw new AssertionError();}catch(UnsupportedOperationException expected){checks++;}
 try{p.update(global,new ContentValues(),null,null);throw new AssertionError();}catch(UnsupportedOperationException expected){checks++;}
 check(p.getType(global).contains("speed"),"original MIME type");
+android.os.Bundle report=new android.os.Bundle();
+p.call("report","com.phoenix.read",report);check(Diagnostics.reports==1,"verified app diagnostics accepted");
+try{p.call("report","com.kylin.read",report);throw new AssertionError("spoofed reporter");}catch(SecurityException expected){checks++;}
+android.os.Binder.uid=99;try{p.call("report","com.phoenix.read",report);throw new AssertionError("untrusted reporter");}catch(SecurityException expected){checks++;}
+check(Diagnostics.reports==1,"forged diagnostics never persisted");
 System.out.println(checks+" actual-provider checks passed (JVM stubs, not Android IPC)");
 }}
 '''})
 
 def main():
+ import sys
+ sys.path.insert(0,str(ROOT/"scripts"))
+ from test_compat import extend
+ extend(SOURCES)
  home=os.environ.get('JAVA_HOME'); suffix='.exe' if os.name=='nt' else ''
  def tool(n):return str(Path(home)/'bin'/(n+suffix)) if home else n
  with tempfile.TemporaryDirectory(prefix='provider-test-') as temp:

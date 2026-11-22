@@ -19,6 +19,7 @@ final class SpeedConfigBridge {
             targetPackage = next;
             lastProviderSpeed = null;
             lastSource = null;
+            providerSnapshot = null;
         }
     }
     private static volatile Float lastProviderSpeed;
@@ -26,6 +27,29 @@ final class SpeedConfigBridge {
     private static volatile String lastProviderFailure;
     private static volatile boolean readerProcess;
     private static volatile boolean loggedLegacyFile;
+    private static volatile boolean asyncRefresh;
+    private static volatile Float providerSnapshot;
+    private static volatile long providerAt;
+    private static final java.util.concurrent.atomic.AtomicLong configEpoch = new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicBoolean refreshing = new java.util.concurrent.atomic.AtomicBoolean();
+    private static final java.util.concurrent.ExecutorService configWorker = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "VideoSpeedConfig"); t.setDaemon(true); return t;
+    });
+
+    static void enableAsyncRefresh() { asyncRefresh = true; }
+    static void invalidate() { configEpoch.incrementAndGet(); providerSnapshot = null; providerAt = 0; policyAt=0; }
+
+    private static XSharedPreferences policyPreferences;
+    static int currentPolicy() { return policyPreferences == null ? 0 : SpeedSettings.policy(policyPreferences::getFloat,targetPackage); }
+    private static volatile long policyAt;
+
+    static int policy(XSharedPreferences preferences) {
+        long now=android.os.SystemClock.elapsedRealtime();
+        if (now-policyAt>=500 || policyAt==0) { preferences.reload();policyAt=now; }
+        return SpeedSettings.policy(preferences::getFloat, targetPackage);
+    }
+
+    static void report(String kind, String detail) { Diagnostics.report(resolveContext(), kind, detail); }
 
     static void useReaderPreferences() {
         readerProcess = true;
@@ -68,27 +92,64 @@ final class SpeedConfigBridge {
         if (context != null) {
             Context appContext = context.getApplicationContext();
             applicationContext = appContext != null ? appContext : context;
+            if (observerInstalled.compareAndSet(false, true)) {
+                configWorker.execute(() -> {
+                    try {
+                        applicationContext.getContentResolver().registerContentObserver(SpeedConfigProvider.SPEED_URI, true,
+                                new android.database.ContentObserver(null) {
+                                    @Override public void onChange(boolean selfChange) { invalidate(); }
+                                });
+                    } catch (RuntimeException unavailable) { observerInstalled.set(false); }
+                });
+            }
         }
     }
 
+    private static final java.util.concurrent.atomic.AtomicBoolean observerInstalled = new java.util.concurrent.atomic.AtomicBoolean();
+
     static float getSpeed(XSharedPreferences legacyPrefs, float fallback) {
+        policyPreferences = legacyPrefs;
         if (readerProcess) {
             legacyPrefs.reload();
             logLegacyFile(legacyPrefs);
             float stored = SpeedSettings.resolve(legacyPrefs::getFloat, targetPackage, Float.NaN);
             if (isValidSpeed(stored)) {
                 logSource("XSharedPreferences reader");
+                report("config", "CONFIG_RATE="+stored+"x;SOURCE=XSharedPreferences reader");
                 return stored;
             }
         }
-        Float providerSpeed = readProviderSpeed();
+        Float providerSpeed;
+        if (!asyncRefresh || providerSnapshot == null) {
+            long epoch = configEpoch.get();
+            providerSpeed = readProviderSpeed();
+            if (providerSpeed != null && epoch == configEpoch.get()) { providerSnapshot = providerSpeed; providerAt = android.os.SystemClock.elapsedRealtime(); }
+        } else {
+            providerSpeed = providerSnapshot;
+            if (android.os.SystemClock.elapsedRealtime() - providerAt >= 500 && refreshing.compareAndSet(false, true)) {
+                long epoch = configEpoch.get();
+                configWorker.execute(() -> {
+                    try {
+                        Float latest = readProviderSpeed();
+                        // A failed query must keep the preference fallback available.
+                        if (epoch == configEpoch.get()) {
+                            providerSnapshot = latest;
+                            providerAt = android.os.SystemClock.elapsedRealtime();
+                        }
+                    } finally { refreshing.set(false); }
+                });
+            }
+        }
         if (providerSpeed != null) {
+            report("config", "CONFIG_RATE="+providerSpeed+"x;SOURCE=ContentProvider");
             return providerSpeed;
         }
         legacyPrefs.reload();
         logLegacyFile(legacyPrefs);
         logSource("XSharedPreferences fallback");
-        return SpeedSettings.resolve(legacyPrefs::getFloat, targetPackage, fallback);
+        float result = SpeedSettings.resolve(legacyPrefs::getFloat, targetPackage, fallback);
+        report("config", "CONFIG_RATE="+result+"x;SOURCE=XSharedPreferences fallback");
+        return result;
     }
 
     static synchronized boolean hasSpeedChanged(XSharedPreferences legacyPrefs) {

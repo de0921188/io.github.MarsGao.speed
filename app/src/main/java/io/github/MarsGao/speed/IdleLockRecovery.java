@@ -23,6 +23,16 @@ final class IdleLockRecovery {
                     return;
                 }
                 if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("Cannot create recovery directory");
+                File oldLock = new File(dir,"guard.lock"), protocol = new File(oldLock,"protocol");
+                String version = protocol.isFile() ? new String(java.nio.file.Files.readAllBytes(protocol.toPath()),StandardCharsets.US_ASCII).trim() : "";
+                if (oldLock.isDirectory() && !"3".equals(version)) {
+                    // Retire the previous wall-clock watcher through its existing stop flag.
+                    // Never signal a PID taken from a file or modify a global daemon.
+                    if (flag.exists() && !flag.delete()) throw new java.io.IOException("Cannot retire old recovery guard");
+                    Thread.sleep(5500);
+                }
+                if (!(SpeedSettings.idleEnabled(SpeedPreferences.open(owner)::getFloat) || TimerControls.sleeping(owner))
+                        || !IdleLockRoot.active(owner)) return;
                 File script = new File(dir, "guard.sh"), pending = new File(dir, "guard.new");
                 try (InputStream input = owner.getResources().openRawResource(R.raw.idle_recovery);
                      FileOutputStream output = new FileOutputStream(pending)) {
@@ -32,7 +42,7 @@ final class IdleLockRecovery {
                 if (!pending.renameTo(script)) throw new java.io.IOException("Cannot install recovery script");
                 try (FileOutputStream output = new FileOutputStream(flag)) { output.write('1'); }
                 String command = "nohup /system/bin/sh " + quote(script.getAbsolutePath()) + " " + quote(dir.getAbsolutePath())
-                        + " </dev/null >>" + quote(new File(dir, "guard.log").getAbsolutePath()) + " 2>&1 &";
+                        + " " + (android.os.Process.myUid()/100000) + " </dev/null >/dev/null 2>&1 &";
                 if (!IdleLockRoot.command(command, 10)) Log.w("VideoSpeed", "Recovery guard launch failed");
             } catch (Exception error) { Log.w("VideoSpeed", "Recovery sync failed", error); }
         });
@@ -42,9 +52,11 @@ final class IdleLockRecovery {
         try {
             File dir = directory(context);
             if (!dir.isDirectory() && !dir.mkdirs()) throw new java.io.IOException("Cannot create heartbeat directory");
-            try (FileOutputStream output = new FileOutputStream(new File(dir, "heartbeat"))) {
-                output.write(Long.toString(System.currentTimeMillis() / 1000).getBytes(StandardCharsets.US_ASCII));
+            File next = new File(dir,"heartbeat.new");
+            try (FileOutputStream output = new FileOutputStream(next)) {
+                output.write((android.os.Process.myPid()+" "+android.os.SystemClock.elapsedRealtime()/1000).getBytes(StandardCharsets.US_ASCII));
             }
+            if (!next.renameTo(new File(dir,"heartbeat"))) throw new java.io.IOException("Cannot publish heartbeat");
         } catch (java.io.IOException error) { Log.w("VideoSpeed", "Recovery heartbeat unavailable", error); }
     }
 

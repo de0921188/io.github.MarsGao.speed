@@ -24,6 +24,28 @@ final class IdleLockHook {
     private WeakReference<Activity> current = new WeakReference<>(null);
     private final Runnable deadline = this::expire;
     private long duration;
+    private long sleepUntil;
+    private int boot = -1;
+    private boolean playbackOnly, waitingForPlayback;
+    private final Handler playbackHandler = new Handler(Looper.getMainLooper());
+    private final Runnable playbackTick = new Runnable() {
+        @Override public void run() {
+            if (current.get() == null || !playbackOnly) return;
+            boolean moving = PlaybackPresence.moving();
+            if (!moving) {
+                if (!waitingForPlayback) Diagnostics.report(current.get(),"idle","WAIT_PROGRESS");
+                timer.freeze(SystemClock.elapsedRealtime()); waitingForPlayback = true;
+            }
+            else if (waitingForPlayback) {
+                long now = SystemClock.elapsedRealtime();
+                timer.thaw(now);
+                waitingForPlayback = false;
+                Diagnostics.report(current.get(),"idle","PLAYBACK_RESUMED");
+            }
+            handler.removeCallbacks(deadline); schedule();
+            playbackHandler.postDelayed(this,2000);
+        }
+    };
     private boolean retryOnTouch;
     private long interactionGeneration;
     private final java.util.WeakHashMap<Activity, Boolean> started = new java.util.WeakHashMap<>();
@@ -141,16 +163,25 @@ final class IdleLockHook {
         interactionGeneration++;
         if (activity.isFinishing() || activity.isDestroyed()) return;
         handler.removeCallbacks(deadline);
+        playbackHandler.removeCallbacks(playbackTick);
         current = new WeakReference<>(activity);
         try {
             preferences.reload();
-            boolean enabled = SpeedSettings.idleEnabled(preferences::getFloat);
-            duration = enabled ? SpeedSettings.idleMinutes(preferences::getFloat) * 60000L : 0;
+            duration = SpeedSettings.idleDuration(preferences::getFloat, activity.getPackageName());
+            boot = TimerControls.boot(activity);
+            sleepUntil = SpeedSettings.deadline(preferences::getFloat, SpeedSettings.SLEEP_UNTIL, boot);
             retryOnTouch = false;
             if (newSession) lastTouchAt = SystemClock.elapsedRealtime();
             newSession = false;
             timer.resume(SystemClock.elapsedRealtime(), duration);
             timer.touch(lastTouchAt, false);
+            timer.deferUntil(SpeedSettings.deadline(preferences::getFloat, SpeedSettings.PAUSE_UNTIL, boot));
+            playbackOnly = SpeedSettings.playbackOnly(preferences::getFloat,activity.getPackageName()) && duration > 0;
+            waitingForPlayback = playbackOnly;
+            if (playbackOnly) {
+                timer.freeze(SystemClock.elapsedRealtime());PlaybackPresence.moving();playbackHandler.postDelayed(playbackTick,2000);
+            }
+            Diagnostics.report(activity.getApplicationContext(), "hook", "OBSERVING_IDLE_MINUTES=" + (duration / 60000));
             schedule();
         } catch (Throwable error) {
             timer.pause();
@@ -164,6 +195,7 @@ final class IdleLockHook {
         interactionGeneration++;
         handler.removeCallbacks(deadline);
         timer.pause();
+        playbackHandler.removeCallbacks(playbackTick);
         retryOnTouch = false;
         current.clear();
     }
@@ -174,6 +206,8 @@ final class IdleLockHook {
         interactionGeneration++;
         lastTouchAt = SystemClock.elapsedRealtime();
         if (retryOnTouch) {
+            preferences.reload();
+            sleepUntil = SpeedSettings.deadline(preferences::getFloat,SpeedSettings.SLEEP_UNTIL,boot);
             timer.resume(SystemClock.elapsedRealtime(), duration);
             retryOnTouch = false;
         }
@@ -181,6 +215,7 @@ final class IdleLockHook {
         boolean held = action != MotionEvent.ACTION_UP && action != MotionEvent.ACTION_CANCEL
                 && action != MotionEvent.ACTION_OUTSIDE;
         timer.touch(SystemClock.elapsedRealtime(), held);
+        timer.deferUntil(SpeedSettings.deadline(preferences::getFloat, SpeedSettings.PAUSE_UNTIL, boot));
         // Keep at most one pending callback. Release starts a fresh full interval.
         handler.removeCallbacks(deadline);
         schedule();
@@ -188,6 +223,10 @@ final class IdleLockHook {
 
     private void schedule() {
         long remaining = timer.remaining(SystemClock.elapsedRealtime());
+        if (sleepUntil > 0) {
+            long sleep = Math.max(0, sleepUntil - SystemClock.elapsedRealtime());
+            remaining = remaining < 0 ? sleep : Math.min(remaining, sleep);
+        }
         if (remaining >= 0) handler.postDelayed(deadline, remaining);
     }
 
@@ -195,14 +234,22 @@ final class IdleLockHook {
         Activity activity = current.get();
         if (activity == null || activity.isFinishing() || activity.isDestroyed()
                 || (!activity.hasWindowFocus() && !hasOwnDialog(activity))) { timer.pause(); return; }
+        preferences.reload();
+        duration = SpeedSettings.idleDuration(preferences::getFloat, activity.getPackageName());
+        timer.duration(duration);
+        if (playbackOnly && waitingForPlayback) timer.freeze(SystemClock.elapsedRealtime());
+        timer.deferUntil(SpeedSettings.deadline(preferences::getFloat, SpeedSettings.PAUSE_UNTIL, boot));
+        sleepUntil = SpeedSettings.deadline(preferences::getFloat, SpeedSettings.SLEEP_UNTIL, boot);
+        boolean sleepDue = sleepUntil > 0 && SystemClock.elapsedRealtime() >= sleepUntil;
         long remaining = timer.remaining(SystemClock.elapsedRealtime());
-        if (remaining < 0) return;
-        if (remaining > 0) { schedule(); return; }
+        if (!sleepDue && remaining != 0) { schedule(); return; }
         timer.pause(); // One request per inactivity interval, including failure.
+        if (sleepDue) sleepUntil = 0; // Do not repeatedly submit a due fixed timer while IPC is pending.
         final long generation = interactionGeneration;
         cancelRequest();
         pendingRequest = new java.util.concurrent.atomic.AtomicBoolean(true);
         Bundle request = IdleLockRequest.create(pendingRequest);
+        request.putBoolean("sleep", sleepDue);
         if (IdleLockChannel.send(activity, handler, request, locked -> {
             if (generation != interactionGeneration) return;
             retryOnTouch = !locked;

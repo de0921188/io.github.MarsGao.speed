@@ -100,7 +100,7 @@ final class ReaderVideoHook {
                         float requested = (float) XposedHelpers.callMethod(param.args[0], "getSpeed");
                         if (!Float.isFinite(requested) || requested <= 0f) return;
                         if (hasVideoSurface(param.thisObject)) {
-                            float selected = hasCustomSpeed(param.thisObject, target)
+                            float selected = SpeedConfigBridge.currentPolicy() != 2 && hasCustomSpeed(param.thisObject, target)
                                     ? manualValues.getOrDefault(param.thisObject, target) : target;
                             float temporary = longPress.resolve(param.thisObject, requested, selected, SystemClock.elapsedRealtime());
                             if (!Float.isNaN(temporary)) {
@@ -115,6 +115,10 @@ final class ReaderVideoHook {
                                 }
                                 return;
                             }
+                        }
+                        if (SpeedConfigBridge.currentPolicy() == 2 && hasVideoSurface(param.thisObject)) {
+                            customSpeedConfig.remove(param.thisObject); manualValues.remove(param.thisObject);
+                            XposedHelpers.callMethod(param.args[0], "setSpeed", target); return;
                         }
                         if (Math.abs(requested - 1f) >= 0.001f
                                 && !Boolean.TRUE.equals(newMediaPending.get(param.thisObject))) {
@@ -207,6 +211,7 @@ final class ReaderVideoHook {
                         protected void afterHookedMethod(MethodHookParam param) {
                             if (param.hasThrowable()) return;
                             if (param.args[0] == null) {
+                                PlaybackPresence.forget(param.thisObject);
                                 surfaceTasks.invalidate(param.thisObject);
                                 boundSurfaces.remove(param.thisObject);
                                 rateProbeTokens.remove(param.thisObject);
@@ -239,6 +244,7 @@ final class ReaderVideoHook {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         released.put(param.thisObject, true);
+                        PlaybackPresence.forget(param.thisObject);
                         surfaceTasks.invalidate(param.thisObject);
                         boundSurfaces.remove(param.thisObject);
                         lastParams.remove(param.thisObject);
@@ -295,7 +301,8 @@ final class ReaderVideoHook {
             if (playback == null) continue;
             try {
                 float target = speed.get();
-                float selected = hasCustomSpeed(player, target) ? manualValues.getOrDefault(player, target) : target;
+                float selected = SpeedConfigBridge.currentPolicy() != 2 && hasCustomSpeed(player, target)
+                        ? manualValues.getOrDefault(player, target) : target;
                 XposedHelpers.callMethod(playback, "setSpeed", selected);
                 // Use the adapter's exact setter; the host may omit its release reset entirely.
                 player.getClass().getMethod("setPlaybackParams", playback.getClass()).invoke(player, playback);
@@ -343,6 +350,8 @@ final class ReaderVideoHook {
                 || !hasVideoSurface(player)) return;
         try {
             float target = speed.get();
+            PlaybackPresence.observe(player, value -> ((Number) XposedHelpers.callMethod(value,"getCurrentPlaybackTime")).longValue());
+            if (SpeedConfigBridge.currentPolicy() == 2) { customSpeedConfig.remove(player); manualValues.remove(player); }
             if (hasCustomSpeed(player, target)) return;
             applying.set(true);
             Object playback = lastParams.get(player);
@@ -393,6 +402,8 @@ final class ReaderVideoHook {
     }
 
     private static void log(String tag, String message) {
+        if (message.contains("default speed=") || message.contains("rateProbe"))
+            SpeedConfigBridge.report("playback", message);
         XposedBridge.log("[VideoSpeed] [Reader] [" + tag + "] " + message);
     }
 }

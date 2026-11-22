@@ -1,3 +1,13 @@
+## 1.2.39：規則、診斷與計時擴充
+
+設定 schema 在原有 speed／enabled／idle 鍵外新增 idle.app.*（繼承／停用／分鐘）、policy.app.*（原規則／換媒體重設／固定）、idle.playing.*（試驗播放限定），由 UI、備份與 Hook 共用解析。Root 接收端也再次核對各 App 停用規則與暫停狀態。timer.* 保存 boot_count 及 elapsedRealtime 秒數，跨開機失效且不匯出；睡眠請求仍使用五秒時效與可撤銷 Binder 憑證。
+
+抖音 Provider 成功路徑可快取；ContentObserver 及 prepare 使快取失效，背景刷新採代次檢查避免舊結果覆蓋新失效。首讀／失敗備援仍可能同步執行。Reader 保留 XSharedPreferences 優先。播放限定模式用弱引用播放器進度取樣，不讀畫面內容，無進度時凍結並保留剩餘時間。
+
+Root guard protocol=3：heartbeat 原子發布 PID＋elapsedRealtime 秒數，shell 用 /proc/uptime 與程序 PID 同時核對；僅有程序、沒有相符服務心跳時亦可重啟服務。各 Android user 與日誌輪替已納入腳本檢查。舊 guard 透過既有旗標退出再切換，保留 force-stop 尊重行為。
+
+Diagnostics 為 UID／包名驗證後的限長、限頻本機回報；不存在回報不代表未勾作用域。ModuleToolsActivity 將固定代碼依目前語言顯示並匯出，不使用畫面讀取或通用 Root 命令介面。繁簡中文使用 Android 資源選擇，預設簡體，Hant／Hans 與 TW／CN 資源齊全；系統語言不受模組改動。
+
 ## 1.2.38 gesture and idle-lock reliability
 
 Device follow-up on 2026-11-22: Douyin native landscape release samples after switching video were approximately 1.242x for configured 1.23x. A UID/cmdline-verified kill of module PID 20403 recovered foreground service in 2.125 seconds as PID 12513; guard recovery count increased and the unchanged Douyin PID 20402 subsequently locked at 16:29:32.991. Original speed files were restored and checked using raw base64 reads (su terminal output expands newlines). This is one ordinary process-kill recovery trial; force-stop and reboot are separate cases. See the timestamped device-validation UPDATE_SUMMARY.

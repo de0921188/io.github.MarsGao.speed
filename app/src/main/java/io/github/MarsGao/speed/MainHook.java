@@ -60,6 +60,8 @@ public class MainHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 SpeedConfigBridge.setContext((Context) param.args[0]);
+                if ("com.ss.android.ugc.aweme".equals(((Context) param.args[0]).getPackageName()))
+                    SpeedConfigBridge.enableAsyncRefresh();
             }
         });
     }
@@ -275,7 +277,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 XposedBridge.log("hooked AbstractMediaPlayer->notifyOnInfo");
             } else if (douyin) {
                 try {
-                    DouyinSpeedState speedState = new DouyinSpeedState(MainHook::getSpeedConfig);
+                    DouyinSpeedState speedState = new DouyinSpeedState(MainHook::getSpeedConfig, () -> SpeedConfigBridge.policy(prefs));
                     LongPressSpeedState longPress = new LongPressSpeedState();
                     java.util.Map<Object, String> heldPlayers = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
                     LongPressGestureHook.install(longPress, "douyin", () -> {
@@ -286,9 +288,11 @@ public class MainHook implements IXposedHookLoadPackage {
                             synchronized (heldPlayers) { snapshot = new java.util.HashMap<>(heldPlayers); heldPlayers.clear(); }
                             for (java.util.Map.Entry<Object, String> entry : snapshot.entrySet()) {
                                 try {
-                                    float selected = speedState.current();
+                                    float selected = "setSpeed".equals(entry.getValue())
+                                            ? speedState.current(entry.getKey()) : speedState.current();
                                     XposedHelpers.callMethod(entry.getKey(), entry.getValue(), selected);
                                     XposedBridge.log("[VideoSpeed] douyin release restored=" + selected);
+                                    SpeedConfigBridge.report("playback", "RESTORE_RATE=" + selected + "x");
                                     if ("setSpeed".equals(entry.getValue())) DouyinPlaybackProbe.sample(entry.getKey(), selected, longPress);
                                 } catch (Throwable error) { XposedBridge.log("[VideoSpeed] douyin release restore failed: " + error); }
                             }
@@ -304,6 +308,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                     float temporary = longPress.resolve(requested, selected, android.os.SystemClock.elapsedRealtime());
                                     if (!Float.isNaN(temporary) && longPress.touching()) heldPlayers.put(p.thisObject, "setPlaySpeed");
                                     if (!Float.isNaN(temporary)) p.args[0] = temporary;
+                                    else if (SpeedConfigBridge.policy(prefs) == 2) p.args[0] = selected;
                                     else if (requested == 1f) p.args[0] = selected;
                                     XposedBridge.log("[VideoSpeed] douyin backend=" + backend + " requested="
                                             + requested + " applied=" + p.args[0]);
@@ -320,7 +325,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     try {
                     XposedHelpers.findAndHookMethod(simPlayerClass, "resume", new XC_MethodHook() {
                         @Override protected void afterHookedMethod(MethodHookParam param) {
-                            float speed = speedState.current();
+                            float speed = speedState.current(param.thisObject);
                             XposedHelpers.callMethod(param.thisObject, "setSpeed", speed);
                             XposedBridge.log("douyin resume current player speed=" + speed);
                         }
@@ -334,6 +339,8 @@ public class MainHook implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Object thisObject = param.thisObject;
+                            speedState.newMedia(thisObject);
+                            SpeedConfigBridge.invalidate();
 
                             if (resumeHooked.compareAndSet(false, true)) {
                                 StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
@@ -347,7 +354,6 @@ public class MainHook implements IXposedHookLoadPackage {
                                             XC_MethodHook mh = new XC_MethodHook() {
                                                 @Override
                                                 protected void afterHookedMethod(MethodHookParam param) {
-                                                    float speed = speedState.current();
                                                     Object current = activePlayer.resolve(param.thisObject, simPlayerClass);
                                                     if (current == null) {
                                                         if (unknownOwnerLogged.compareAndSet(false, true)) {
@@ -355,6 +361,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                                         }
                                                         return;
                                                     }
+                                                    float speed = speedState.current(current);
                                                     XposedHelpers.callMethod(current, "setSpeed", speed);
                                                     XposedBridge.log("douyin setSpeed1: " + speed);
                                                 }
@@ -375,7 +382,8 @@ public class MainHook implements IXposedHookLoadPackage {
                     XposedHelpers.findAndHookMethod("com.ss.android.ugc.aweme.video.simplayer.SimPlayer", lpparam.classLoader, "setSpeed", float.class, new XC_MethodHook() {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
-                            float selectedSpeed = speedState.current();
+                            float selectedSpeed = speedState.current(param.thisObject);
+                            PlaybackPresence.observe(param.thisObject, value -> { Object info = XposedHelpers.callMethod(value,"getVideoInfoProvider"); return ((Number) XposedHelpers.callMethod(info,"getCurrentPosition")).longValue(); });
                             float temporary = longPress.resolve((float) param.args[0], selectedSpeed, android.os.SystemClock.elapsedRealtime());
                             if (!Float.isNaN(temporary)) {
                                 if (longPress.touching()) heldPlayers.put(param.thisObject, "setSpeed");
@@ -383,6 +391,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                 param.args[0] = temporary;
                                 return;
                             }
+                            if (SpeedConfigBridge.policy(prefs) == 2) { param.args[0] = selectedSpeed; return; }
                             if ((float) param.args[0] != selectedSpeed) {
                                 StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
                                 if (stackTraceElements.length <= 24) {

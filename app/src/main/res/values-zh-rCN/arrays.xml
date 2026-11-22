@@ -1,0 +1,25 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string-array name="supported_app_labels">
+        <item>红果免费漫剧（Kylin）</item>
+        <item>红果免费短剧</item>
+        <item>哔哩哔哩</item>
+        <item>哔哩哔哩国际版</item>
+        <item>X / Twitter</item>
+        <item>抖音</item>
+        <item>抖音极速版</item>
+        <item>抖音火山版</item>
+        <item>抖音 mobile</item>
+        <item>小红书</item>
+        <item>微博</item>
+        <item>Instagram</item>
+        <item>Instander</item>
+        <item>Telegram</item>
+        <item>微信视频号</item>
+    </string-array>
+    <string-array name="app_filters">
+        <item>全部支持的应用</item>
+        <item>已安装的应用</item>
+        <item>独立设置的应用</item>
+    </string-array>
+</resources>

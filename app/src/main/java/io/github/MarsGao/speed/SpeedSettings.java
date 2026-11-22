@@ -9,6 +9,12 @@ final class SpeedSettings {
     static final String ENABLED_PREFIX = "enabled.app.";
     static final String IDLE_ENABLED = "idle.enabled";
     static final String IDLE_MINUTES = "idle.minutes";
+    static final String IDLE_APP_PREFIX = "idle.app.";
+    static final String POLICY_PREFIX = "policy.app.";
+    static final String PLAYING_PREFIX = "idle.playing.";
+    static final String PAUSE_UNTIL = "timer.pauseUntil";
+    static final String SLEEP_UNTIL = "timer.sleepUntil";
+    static final String TIMER_BOOT = "timer.boot";
     static final float DEFAULT_SPEED = 1.5f;
     static final float MIN_SPEED = 0.25f;
     static final float MAX_SPEED = 4f;
@@ -18,6 +24,40 @@ final class SpeedSettings {
     }
 
     private SpeedSettings() { }
+
+    // Zero inherits; -1 disables this app; a positive integer overrides the minutes.
+    static int idleRule(FloatReader reader, String pkg) {
+        float value = readFloat(reader, IDLE_APP_PREFIX + pkg, 0f);
+        return value == -1f || validIdleMinutes(value) ? (int) value : 0;
+    }
+
+    static long idleDuration(FloatReader reader, String pkg) {
+        if (!idleEnabled(reader)) return 0;
+        int rule = idleRule(reader, pkg);
+        return rule < 0 ? 0 : (rule > 0 ? rule : idleMinutes(reader)) * 60000L;
+    }
+
+    // 0 = existing native policy, 1 = reset at next media, 2 = fixed module speed.
+    static int policy(FloatReader reader, String pkg) {
+        float value = readFloat(reader, POLICY_PREFIX + pkg, 0f);
+        return value == 1f || value == 2f ? (int) value : 0;
+    }
+
+    static boolean supportsPolicy(String pkg) {
+        return "com.ss.android.ugc.aweme".equals(pkg) || "com.phoenix.read".equals(pkg)
+                || "com.kylin.read".equals(pkg);
+    }
+
+    static long deadline(FloatReader reader, String key, int boot) {
+        if (boot < 0 || readFloat(reader, TIMER_BOOT, -1f) != boot) return 0;
+        float seconds = readFloat(reader, key, 0f);
+        return Float.isFinite(seconds) && seconds > 0 && seconds < Long.MAX_VALUE / 1000f
+                ? (long) (seconds * 1000d) : 0;
+    }
+
+    static boolean playbackOnly(FloatReader reader, String pkg) {
+        return supportsPolicy(pkg) && readFloat(reader, PLAYING_PREFIX+pkg,0f) == 1f;
+    }
 
     static boolean idleEnabled(FloatReader reader) {
         return readFloat(reader, IDLE_ENABLED, 0f) == 1f;

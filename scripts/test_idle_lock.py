@@ -395,7 +395,41 @@ System.out.println(checks+''')
 
 SOURCES['android/content/Intent.java']=SOURCES['android/content/Intent.java'].replace('public Intent putExtra', 'public Intent putExtra',1).replace('public class Intent {','public class Intent {private android.os.Bundle requestBundle;public Intent putExtra(String k,android.os.Bundle b){requestBundle=b;return this;}public android.os.Bundle getBundleExtra(String k){return requestBundle;}')
 
+# Execute real boot-scoped controls and the broker gate in addition to old timer checks.
+SOURCES.pop('io/github/MarsGao/speed/TimerControls.java',None)
+SOURCES['android/provider/Settings.java'] = 'package android.provider;public class Settings {public static class Global {public static int boot=1;public static int getInt(android.content.ContentResolver r,String k,int f){return boot;}}}'
+SOURCES['android/content/SharedPreferences.java'] = SOURCES['android/content/SharedPreferences.java'].replace('public java.io.File mFile;', 'public java.io.File mFile;public Editor edit(){return new Editor();}public class Editor {private java.util.Map<String,Float> pending=new java.util.HashMap<>();public Editor putFloat(String k,float v){pending.put(k,v);return this;}public boolean commit(){values.putAll(pending);return true;}}')
+SOURCES['io/github/MarsGao/speed/TimerControlTest.java'] = r'''package io.github.MarsGao.speed;
+public class TimerControlTest {
+static int n;static void ok(boolean b,String m){if(!b)throw new AssertionError(m);n++;}
+public static void main(String[] args){
+android.content.Context c=new android.content.Context();c.prefs.values.put("idle.enabled",1f);android.os.SystemClock.now=1000;
+TimerControls.set(c,SpeedSettings.PAUSE_UNTIL,1);ok(TimerControls.paused(c),"pause stored and read");
+ok(!IdleLockProvider.requestLock(c,"com.phoenix.read",42),"pause gate prevents already pending old hook request");
+TimerControls.set(c,SpeedSettings.PAUSE_UNTIL,0);ok(!TimerControls.paused(c),"resume removes pause");
+c.prefs.values.put("idle.app.com.phoenix.read",-1f);ok(!IdleLockProvider.requestLock(c,"com.phoenix.read",42),"per-app exclusion enforced at receiver");
+c.prefs.values.put("idle.enabled",0f);TimerControls.set(c,SpeedSettings.SLEEP_UNTIL,1);
+ok(TimerControls.sleeping(c),"sleep independent from global inactivity switch");
+android.os.Bundle request=IdleLockRequest.create(new java.util.concurrent.atomic.AtomicBoolean(true));request.putBoolean("sleep",true);
+ok(!IdleLockProvider.requestLock(c,"com.phoenix.read",42,request),"sleep cannot fire early");
+android.os.SystemClock.now+=60000;request=IdleLockRequest.create(new java.util.concurrent.atomic.AtomicBoolean(true));request.putBoolean("sleep",true);
+ok(IdleLockProvider.requestLock(c,"com.phoenix.read",42,request),"due sleep can lock with inactivity disabled");
+ok(!TimerControls.sleeping(c),"successful sleep consumed exactly once");
+TimerControls.set(c,SpeedSettings.SLEEP_UNTIL,1);android.provider.Settings.Global.boot=2;
+ok(!TimerControls.sleeping(c),"reboot invalidates old sleep");
+TimerControls.set(c,SpeedSettings.PAUSE_UNTIL,0);ok(!TimerControls.sleeping(c),"new boot control cannot revive old timer");
+android.provider.Settings.Global.boot=-1;
+try{TimerControls.set(c,SpeedSettings.SLEEP_UNTIL,1);throw new AssertionError();}catch(IllegalStateException expected){n++;}
+System.out.println(n+" real timer control/broker checks passed (JVM stubs)");
+}}
+'''
+
 def main():
+    import sys
+    sys.path.insert(0,str(ROOT/"scripts"))
+    from test_compat import extend
+    extend(SOURCES)
+    SOURCES.pop("io/github/MarsGao/speed/TimerControls.java",None)
     home = os.environ.get('JAVA_HOME')
     suffix = '.exe' if os.name == 'nt' else ''
     def tool(n): return str(Path(home) / 'bin' / (n + suffix)) if home else n
@@ -414,9 +448,10 @@ def main():
             target = p / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(source, encoding='utf8')
-        for name in ('IdleLockRequest', 'WindowInputHook', 'IdleTimeout', 'IdleLockHook', 'IdleLockAdmin', 'IdleLockProvider', 'IdleLockService', 'IdleLockActivity', 'IdleLockChannel', 'IdleLockBootReceiver', 'SpeedSettings', 'SpeedPreferences', 'SpeedBackup'):
+        for name in ('IdleLockRequest', 'WindowInputHook', 'IdleTimeout', 'IdleLockHook', 'IdleLockAdmin', 'IdleLockProvider', 'IdleLockService', 'IdleLockActivity', 'IdleLockChannel', 'IdleLockBootReceiver', 'SpeedSettings', 'SpeedPreferences', 'SpeedBackup', 'TimerControls'):
             shutil.copyfile(ROOT / f'app/src/main/java/io/github/MarsGao/speed/{name}.java', p / f'io/github/MarsGao/speed/{name}.java')
         subprocess.run([tool('javac'), '--release', '11', '-d', str(p / 'out'), *map(str, p.rglob('*.java'))], check=True)
         subprocess.run([tool('java'), '-cp', str(p / 'out'), 'io.github.MarsGao.speed.IdleLockTest'], check=True)
+        subprocess.run([tool('java'), '-cp', str(p/'out'), 'io.github.MarsGao.speed.TimerControlTest'], check=True)
 
 if __name__ == '__main__': main()

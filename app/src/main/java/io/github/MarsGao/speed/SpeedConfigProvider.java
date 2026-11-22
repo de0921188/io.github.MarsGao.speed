@@ -31,6 +31,17 @@ public class SpeedConfigProvider extends ContentProvider {
         return true;
     }
 
+    @Override public android.os.Bundle call(String method, String pkg, android.os.Bundle data) {
+        if (!"report".equals(method) || data == null || pkg == null) return null;
+        String[] callers = getContext().getPackageManager().getPackagesForUid(android.os.Binder.getCallingUid());
+        if (callers == null || !java.util.Arrays.asList(callers).contains(pkg)
+                || !java.util.Arrays.asList(getContext().getResources().getStringArray(R.array.xposedscope)).contains(pkg))
+            throw new SecurityException("Caller/package mismatch");
+        String kind = data.getString("kind", ""), detail = data.getString("detail", "");
+        Diagnostics.record(getContext(), pkg, kind, detail);
+        return new android.os.Bundle();
+    }
+
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs, String sortOrder) {
         if (!PATH_SPEED.equals(uri.getLastPathSegment())) {

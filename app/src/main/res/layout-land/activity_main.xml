@@ -1,0 +1,28 @@
+<?xml version='1.0' encoding='utf-8'?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:paddingStart="20dp" android:paddingEnd="20dp" android:paddingTop="24dp" android:background="#003b4a">
+    <ScrollView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:fillViewport="false">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+            <TextView android:id="@+id/speedLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:labelFor="@id/editTextText" android:text="@string/speed_label" android:textColor="#f4d19e" android:textSize="23sp" android:textStyle="bold" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="@string/global_speed_help" android:textColor="#c2d6dc" android:textSize="13sp" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:gravity="center_vertical" android:orientation="horizontal">
+                <EditText android:id="@+id/editTextText" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1" android:backgroundTint="#f4d19e" android:importantForAutofill="no" android:inputType="numberDecimal" android:selectAllOnFocus="true" android:singleLine="true" android:textColor="#ffffff" android:textColorHint="#9bb6c0" android:textSize="24sp" />
+                <Button android:id="@+id/button" android:layout_width="104dp" android:layout_height="48dp" android:layout_marginStart="16dp" android:background="@drawable/button_bg" android:text="@string/set_speed" android:textColor="#f4d19e" />
+            </LinearLayout>
+            <LinearLayout android:id="@+id/globalPresets" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="vertical" />
+            <Button android:id="@+id/idleSettings" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:background="@drawable/button_bg" android:text="@string/idle_title" android:textColor="#f4d19e" android:textSize="14sp" />
+            <Button android:id="@+id/moduleTools" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="4dp" android:background="@drawable/button_bg" android:text="@string/module_tools" android:textColor="#f4d19e" android:textSize="14sp" />
+        </LinearLayout>
+    </ScrollView>
+    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginStart="16dp" android:orientation="vertical">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="@string/app_speed_section" android:textColor="#ffffff" android:textSize="18sp" android:textStyle="bold" />
+        <EditText android:id="@+id/appSearch" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="4dp" android:backgroundTint="#6d939f" android:hint="@string/app_search_hint" android:importantForAutofill="no" android:inputType="text" android:maxLines="1" android:textColor="#ffffff" android:textColorHint="#b0c8cf" android:textSize="14sp" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+            <Spinner android:id="@+id/appFilter" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:backgroundTint="#f4d19e" android:contentDescription="@string/filter_apps" />
+            <Button android:id="@+id/resetAppSpeeds" android:layout_width="116dp" android:layout_height="48dp" android:layout_marginStart="8dp" android:background="@drawable/button_bg" android:text="@string/reset_apps_action" android:textSize="13sp" android:textColor="#f4d19e" />
+            <Button android:id="@+id/backupSettings" android:layout_width="64dp" android:layout_height="48dp" android:layout_marginStart="8dp" android:background="@drawable/button_bg" android:text="@string/backup_settings" android:textColor="#f4d19e" android:textSize="13sp" />
+        </LinearLayout>
+        <TextView android:id="@+id/appCount" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#c2d6dc" android:textSize="12sp" android:layout_marginBottom="4dp" />
+        <ListView android:id="@+id/appSpeedList" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:divider="#285966" android:dividerHeight="1dp" android:paddingBottom="12dp" android:clipToPadding="false" />
+        <TextView android:id="@+id/emptyApps" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="@string/no_matching_apps" android:textColor="#c2d6dc" android:gravity="center" android:visibility="gone" />
+    </LinearLayout>
+</LinearLayout>

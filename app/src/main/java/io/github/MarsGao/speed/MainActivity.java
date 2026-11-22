@@ -57,6 +57,7 @@ public class MainActivity extends Activity {
         prefs = SpeedPreferences.open(this);
         makePrefsReadable();
         if (savedInstanceState != null) pendingIdleMinutes = savedInstanceState.getInt("pendingIdleMinutes");
+        findViewById(R.id.moduleTools).setOnClickListener(view -> startActivity(new Intent(this,ModuleToolsActivity.class)));
         findViewById(R.id.idleSettings).setOnClickListener(view -> editIdleLock());
         refreshIdleLock();
 
@@ -261,7 +262,9 @@ public class MainActivity extends Activity {
             String label = i < labels.length ? labels[i] : packages[i];
             boolean installed = false;
             try {
-                label = manager.getApplicationLabel(manager.getApplicationInfo(packages[i], 0)).toString();
+                android.content.pm.ApplicationInfo info = manager.getApplicationInfo(packages[i],0);
+                if (!"zh".equals(getResources().getConfiguration().getLocales().get(0).getLanguage()))
+                    label = manager.getApplicationLabel(info).toString();
                 installed = true;
             } catch (PackageManager.NameNotFoundException | RuntimeException ignored) {
                 // Keep uninstalled supported apps configurable using the bundled label.
@@ -295,6 +298,7 @@ public class MainActivity extends Activity {
             try {
                 successful = editor.commit();
                 if (successful) makePrefsReadable();
+                if (successful) getContentResolver().notifyChange(SpeedConfigProvider.SPEED_URI, null, 0);
             } catch (RuntimeException error) {
                 successful = false;
                 android.util.Log.w("VideoSpeed", "Settings write failed", error);
@@ -348,6 +352,31 @@ public class MainActivity extends Activity {
         help.setTextSize(13);
         content.addView(help);
 
+        TextView ruleLabel = new TextView(this); ruleLabel.setText(getString(R.string.app_idle_rule_label));content.addView(ruleLabel);
+        Spinner idleMode = new Spinner(this);
+        idleMode.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
+                new String[]{getString(R.string.app_idle_inherit),getString(R.string.app_idle_disabled),getString(R.string.app_idle_custom)}));
+        int rule = SpeedSettings.idleRule(prefs::getFloat,app.packageName);
+        idleMode.setSelection(rule < 0 ? 1 : rule > 0 ? 2 : 0);content.addView(idleMode);
+        EditText idleMinutes = new EditText(this);idleMinutes.setInputType(InputType.TYPE_CLASS_NUMBER);
+        idleMinutes.setHint(getString(R.string.app_idle_minutes_hint));idleMinutes.setText(Integer.toString(rule > 0 ? rule : SpeedSettings.idleMinutes(prefs::getFloat)));
+        content.addView(idleMinutes);
+        idleMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> p,View v,int pos,long id) {idleMinutes.setVisibility(pos==2?View.VISIBLE:View.GONE);}
+            public void onNothingSelected(AdapterView<?> p) { }
+        });
+        CheckBox playing = new CheckBox(this);
+        playing.setText(getString(R.string.app_idle_playing_only));
+        playing.setChecked(SpeedSettings.playbackOnly(prefs::getFloat,app.packageName));
+        if (SpeedSettings.supportsPolicy(app.packageName)) content.addView(playing);
+        Spinner policy = new Spinner(this);
+        if (SpeedSettings.supportsPolicy(app.packageName)) {
+            TextView label = new TextView(this);label.setText(getString(R.string.app_policy_label));content.addView(label);
+            policy.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,
+                    new String[]{getString(R.string.app_policy_legacy),getString(R.string.app_policy_next),getString(R.string.app_policy_fixed)}));
+            policy.setSelection(SpeedSettings.policy(prefs::getFloat,app.packageName));content.addView(policy);
+        }
+
         android.widget.ScrollView editorScroll = new android.widget.ScrollView(this);
         editorScroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -361,7 +390,8 @@ public class MainActivity extends Activity {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
                 Float speed = readInput(input);
                 boolean changed = enabled.isChecked() != SpeedSettings.isEnabled(prefs::getFloat, app.packageName);
-                if (speed != null) save(prefs.edit().putFloat(SpeedSettings.appKey(app.packageName), speed)
+                SharedPreferences.Editor editor = appRules(app.packageName,idleMode,idleMinutes,policy,playing);
+                if (speed != null && editor != null) save(editor.putFloat(SpeedSettings.appKey(app.packageName), speed)
                         .putFloat(SpeedSettings.enabledKey(app.packageName), enabled.isChecked() ? 1f : 0f), () -> {
                     dialog.dismiss();
                     Toast.makeText(this, changed ? getString(R.string.restart_app)
@@ -371,7 +401,9 @@ public class MainActivity extends Activity {
             });
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
                 boolean changed = enabled.isChecked() != SpeedSettings.isEnabled(prefs::getFloat, app.packageName);
-                save(prefs.edit().remove(SpeedSettings.appKey(app.packageName))
+                SharedPreferences.Editor editor = appRules(app.packageName,idleMode,idleMinutes,policy,playing);
+                if (editor == null) return;
+                save(editor.remove(SpeedSettings.appKey(app.packageName))
                         .putFloat(SpeedSettings.enabledKey(app.packageName), enabled.isChecked() ? 1f : 0f), () -> {
                     dialog.dismiss();
                     Toast.makeText(this, changed ? getString(R.string.restart_app)
@@ -380,6 +412,23 @@ public class MainActivity extends Activity {
             });
         });
         dialog.show();
+    }
+
+    private SharedPreferences.Editor appRules(String pkg, Spinner mode, EditText minutes, Spinner policy, CheckBox playing) {
+        int rule = mode.getSelectedItemPosition() == 1 ? -1 : 0;
+        if (mode.getSelectedItemPosition() == 2) {
+            try { rule = Integer.parseInt(minutes.getText().toString().trim()); }
+            catch (NumberFormatException error) {minutes.setError(getString(R.string.idle_minutes_error));return null;}
+            if (!SpeedSettings.validIdleMinutes(rule)) {minutes.setError(getString(R.string.idle_minutes_error));return null;}
+        }
+        SharedPreferences.Editor editor = prefs.edit();
+        if (rule == 0) editor.remove(SpeedSettings.IDLE_APP_PREFIX+pkg);else editor.putFloat(SpeedSettings.IDLE_APP_PREFIX+pkg,rule);
+        if (SpeedSettings.supportsPolicy(pkg)) {
+            editor.putFloat(SpeedSettings.PLAYING_PREFIX+pkg,playing.isChecked()?1f:0f);
+            if (policy.getSelectedItemPosition()==0) editor.remove(SpeedSettings.POLICY_PREFIX+pkg);
+            else editor.putFloat(SpeedSettings.POLICY_PREFIX+pkg,policy.getSelectedItemPosition());
+        }
+        return editor;
     }
 
     private int dp(int value) {
@@ -457,9 +506,15 @@ public class MainActivity extends Activity {
         for (AppEntry app : appAdapter.all) {
             Float speed = values.get(SpeedSettings.appKey(app.packageName));
             Float enabled = values.get(SpeedSettings.enabledKey(app.packageName));
-            if (speed != null || enabled != null) {
+            Float idle = values.get(SpeedSettings.IDLE_APP_PREFIX+app.packageName);
+            Float policy = values.get(SpeedSettings.POLICY_PREFIX+app.packageName);
+            Float playing = values.get(SpeedSettings.PLAYING_PREFIX+app.packageName);
+            if (speed != null || enabled != null || idle != null || policy != null || playing != null) {
                 preview.append("\n").append(app.label).append("\n").append(app.packageName).append("\n");
                 if (speed != null) preview.append(speed).append("x ");
+                if (idle != null) preview.append(getString(R.string.import_idle_rule)).append(idle);
+                if (playing != null) preview.append(getString(R.string.import_playing_only)).append(playing);
+                if (policy != null) preview.append(getString(R.string.import_policy)).append(policy);
                 if (enabled != null) preview.append(getString(enabled == 0f ? R.string.speed_disabled : R.string.enabled_label));
                 preview.append("\n");
             }
@@ -480,6 +535,9 @@ public class MainActivity extends Activity {
         if (replace) for (String pkg : supportedPackages()) {
             editor.remove(SpeedSettings.appKey(pkg));
             editor.remove(SpeedSettings.enabledKey(pkg));
+            editor.remove(SpeedSettings.IDLE_APP_PREFIX+pkg);
+            editor.remove(SpeedSettings.POLICY_PREFIX+pkg);
+            editor.remove(SpeedSettings.PLAYING_PREFIX+pkg);
         }
         for (Map.Entry<String, Float> entry : values.entrySet()) {
             float value = entry.getValue();
@@ -545,6 +603,12 @@ public class MainActivity extends Activity {
             String status = getString(custom ? R.string.speed_custom : R.string.speed_inherit,
                     formatSpeed(effectiveSpeed(app.packageName)));
             if (!SpeedSettings.isEnabled(prefs::getFloat, app.packageName)) status = getString(R.string.speed_disabled);
+            int rule = SpeedSettings.idleRule(prefs::getFloat,app.packageName);
+            String lock = rule < 0 ? getString(R.string.row_idle_disabled) : rule > 0 ? getString(R.string.row_idle_prefix)+rule+getString(R.string.minutes_suffix) : getString(R.string.row_idle_inherit);
+            if (!SpeedSettings.idleEnabled(prefs::getFloat)) lock += getString(R.string.row_master_off);
+            int mode = SpeedSettings.policy(prefs::getFloat,app.packageName);
+            if (mode > 0) lock += mode == 1 ? getString(R.string.row_policy_next) : getString(R.string.row_policy_fixed);
+            ((TextView) row.findViewById(R.id.appRules)).setText(lock);
             Button button = row.findViewById(R.id.appSpeedButton);
             button.setText(status);
             button.setTextColor(Color.parseColor(custom ? "#a8e6cf" : "#f4d19e"));

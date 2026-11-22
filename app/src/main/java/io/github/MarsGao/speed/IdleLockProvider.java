@@ -42,12 +42,19 @@ public class IdleLockProvider extends ContentProvider {
         }
         long identity = Binder.clearCallingIdentity();
         try {
-            if (!SpeedSettings.idleEnabled(SpeedPreferences.open(context)::getFloat)
+            boolean sleep = request != null && request.getBoolean("sleep");
+            if (!(sleep ? TimerControls.sleeping(context) : SpeedSettings.idleDuration(SpeedPreferences.open(context)::getFloat, packageName) > 0)
                     || !IdleLockRoot.active(context)) return false;
+            if (!sleep && TimerControls.paused(context)) return false;
+            if (sleep && SpeedSettings.deadline(SpeedPreferences.open(context)::getFloat,
+                    SpeedSettings.SLEEP_UNTIL, TimerControls.boot(context)) > android.os.SystemClock.elapsedRealtime()) return false;
             PowerManager power = context.getSystemService(PowerManager.class);
             KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
             if (power == null || !power.isInteractive() || keyguard == null || keyguard.isKeyguardLocked()) return false;
-            if (!IdleLockRequest.valid(request) || !IdleLockRoot.lock()) return false;
+            if (!IdleLockRequest.valid(request)) return false;
+            if (!IdleLockRoot.lock()) { Diagnostics.record(context, packageName, "idle", "ROOT_COMMAND_FAILED"); return false; }
+            Diagnostics.record(context, packageName, "idle", sleep ? "SLEEP_COMMAND_OK" : "IDLE_COMMAND_OK");
+            if (sleep) TimerControls.set(context, SpeedSettings.SLEEP_UNTIL, 0);
             Log.i("VideoSpeed", "Idle lock requested by " + packageName);
             return true;
         } catch (RuntimeException error) {

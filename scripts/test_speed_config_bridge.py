@@ -118,14 +118,20 @@ System.out.println(checks+" configuration and speed-file compatibility checks pa
 }}
 '''}
 def main():
+ import sys
+ sys.path.insert(0,str(ROOT/"scripts"))
+ from test_compat import extend
+ extend(SOURCES)
  home=os.environ.get('JAVA_HOME');suffix='.exe' if os.name=='nt' else ''
  def tool(n):return str(Path(home)/'bin'/(n+suffix)) if home else n
  with tempfile.TemporaryDirectory(prefix='reader-config-test-') as tmp:
   base=Path(tmp)
+  SOURCES['io/github/MarsGao/speed/CacheTest.java']='package io.github.MarsGao.speed;\npublic class CacheTest {\nstatic int n;static void check(boolean b,String m){if(!b)throw new AssertionError(m);n++;}\npublic static void main(String[] args)throws Exception {\nandroid.content.Context c=new android.content.Context();SpeedConfigBridge.setContext(c);\nde.robv.android.xposed.XSharedPreferences p=new de.robv.android.xposed.XSharedPreferences();\nSpeedConfigBridge.enableAsyncRefresh();check(SpeedConfigBridge.getSpeed(p,1.5f)==3f,"initial provider value");int before=c.resolver.queries;\nfor(int i=0;i<100;i++)check(SpeedConfigBridge.getSpeed(p,1.5f)==3f,"hot callback cached value");\ncheck(c.resolver.queries==before,"hot callbacks must not repeatedly perform IPC");\nc.resolver.speed=2.2f;SpeedConfigBridge.invalidate();check(SpeedConfigBridge.getSpeed(p,1.5f)==2.2f,"invalidated next callback reads new setting");\nc.resolver.fail=true;SpeedConfigBridge.invalidate();check(SpeedConfigBridge.getSpeed(p,1.5f)==1.25f,"failed provider keeps preference fallback");\nc.resolver.fail=false;c.resolver.speed=1.8f;SpeedConfigBridge.invalidate();check(SpeedConfigBridge.getSpeed(p,1.5f)==1.8f,"provider recovery");\nSystem.out.println(n+" cache callback and invalidation checks passed (JVM)");\n}}\n'
   for name,source in SOURCES.items():
    p=base/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(source,encoding='utf8')
   for name in ('SpeedConfigBridge','SpeedPreferences','SpeedSettings'):
    shutil.copyfile(ROOT/f'app/src/main/java/io/github/MarsGao/speed/{name}.java',base/f'io/github/MarsGao/speed/{name}.java')
   subprocess.run([tool('javac'),'--release','11','-d',str(base/'out'),*map(str,base.rglob('*.java'))],check=True)
   subprocess.run([tool('java'),'-cp',str(base/'out'),'io.github.MarsGao.speed.BridgeTest'],check=True)
+  subprocess.run([tool('java'),'-cp',str(base/'out'),'io.github.MarsGao.speed.CacheTest'],check=True)
 if __name__=='__main__':main()

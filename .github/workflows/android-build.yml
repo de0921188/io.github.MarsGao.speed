@@ -79,6 +79,9 @@ jobs:
         test -n "$SIGNING_KEYSTORE_BASE64" || { echo "Missing SIGNING_KEYSTORE_BASE64; refusing unsigned release."; exit 1; }
         echo "$SIGNING_KEYSTORE_BASE64" | base64 --decode > /tmp/keystore.jks
 
+    - name: Run behavior regression checks
+      run: python3 -B scripts/run_checks.py
+
     - name: Build APK
       env:
         SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}

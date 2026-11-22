@@ -16,6 +16,14 @@ final class SpeedBackup {
             if (SpeedSettings.isValid(speed)) text.append(SpeedSettings.appKey(pkg)).append('=').append(speed).append('\n');
             float enabled = SpeedSettings.enabledValue(reader, pkg, Float.NaN);
             if (!Float.isNaN(enabled)) text.append(SpeedSettings.enabledKey(pkg)).append('=').append(enabled).append('\n');
+            for (String prefix : new String[]{SpeedSettings.IDLE_APP_PREFIX,SpeedSettings.POLICY_PREFIX,SpeedSettings.PLAYING_PREFIX}) {
+                float value;
+                try { value = reader.get(prefix+pkg,Float.NaN); } catch (ClassCastException bad) { continue; }
+                if (prefix.equals(SpeedSettings.IDLE_APP_PREFIX)
+                        ? value == -1f || value == 0f || SpeedSettings.validIdleMinutes(value)
+                        : SpeedSettings.supportsPolicy(pkg) && (value == 0f || value == 1f || prefix.equals(SpeedSettings.POLICY_PREFIX) && value == 2f))
+                    text.append(prefix).append(pkg).append('=').append(value).append('\n');
+            }
         }
         // Optional keys retain version-1 compatibility with existing backups lacking idle settings.
         for (String key : new String[]{SpeedSettings.IDLE_ENABLED, SpeedSettings.IDLE_MINUTES}) {
@@ -47,15 +55,24 @@ final class SpeedBackup {
             boolean enabled = key.startsWith(SpeedSettings.ENABLED_PREFIX);
             boolean idleEnabled = SpeedSettings.IDLE_ENABLED.equals(key);
             boolean idleMinutes = SpeedSettings.IDLE_MINUTES.equals(key);
-            String prefix = enabled ? SpeedSettings.ENABLED_PREFIX : SpeedSettings.APP_PREFIX;
+            boolean idleRule = key.startsWith(SpeedSettings.IDLE_APP_PREFIX);
+            boolean policy = key.startsWith(SpeedSettings.POLICY_PREFIX);
+            boolean playing = key.startsWith(SpeedSettings.PLAYING_PREFIX);
+            String prefix = enabled ? SpeedSettings.ENABLED_PREFIX : idleRule ? SpeedSettings.IDLE_APP_PREFIX
+                    : policy ? SpeedSettings.POLICY_PREFIX : playing ? SpeedSettings.PLAYING_PREFIX : SpeedSettings.APP_PREFIX;
             if (!idleEnabled && !idleMinutes && !SpeedSettings.GLOBAL_KEY.equals(key)
                     && (!key.startsWith(prefix) || !packages.contains(key.substring(prefix.length())))) {
                 throw new IllegalArgumentException("Unsupported key: " + key);
             }
+            if ((policy || playing) && !SpeedSettings.supportsPolicy(key.substring(prefix.length())))
+                throw new IllegalArgumentException("Unsupported policy package");
             float number;
             try { number = Float.parseFloat(value); }
             catch (NumberFormatException error) { throw new IllegalArgumentException("Invalid number: " + key); }
-            if (enabled || idleEnabled ? number != 0f && number != 1f
+            if (idleRule ? number != -1f && number != 0f && !SpeedSettings.validIdleMinutes(number)
+                    : playing ? number != 0f && number != 1f
+                    : policy ? number != 0f && number != 1f && number != 2f
+                    : enabled || idleEnabled ? number != 0f && number != 1f
                     : idleMinutes ? !SpeedSettings.validIdleMinutes(number) : !SpeedSettings.isValid(number)) {
                 throw new IllegalArgumentException("Invalid value: " + key);
             }
