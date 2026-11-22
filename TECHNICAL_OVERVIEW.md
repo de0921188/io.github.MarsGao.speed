@@ -1,3 +1,38 @@
+## 1.2.38 gesture and idle-lock reliability
+
+Device follow-up on 2026-11-22: Douyin native landscape release samples after switching video were approximately 1.242x for configured 1.23x. A UID/cmdline-verified kill of module PID 20403 recovered foreground service in 2.125 seconds as PID 12513; guard recovery count increased and the unchanged Douyin PID 20402 subsequently locked at 16:29:32.991. Original speed files were restored and checked using raw base64 reads (su terminal output expands newlines). This is one ordinary process-kill recovery trial; force-stop and reboot are separate cases. See the timestamped device-validation UPDATE_SUMMARY.
+
+WindowInputHook shares one LSPosed hook on ViewRootImpl.WindowInputEventReceiver.onInputEvent between gesture and idle observers. It filters pointer actions, ignores key/hover input, catches observer failures independently, and never alters or retains events. Reflection failure keeps the existing Activity/Dialog fallbacks. The gesture fallback also observes concrete Activity overrides and deduplicates down-time/event-time/action snapshots. Activity pause restores held acceleration without requiring an ACTION_UP.
+
+LongPressSpeedState tracks temporary 2x while a pointer is down rather than assuming an app-specific 350ms threshold; real Kylin 7.2.5.32 emits 2x at 303-305ms. Release resets remain protected until the next gesture or media replacement rather than expiring after one second. Reader state uses weak player keys; native manual choices remain separate. Both adapters proactively restore the chosen speed on release. DouyinPlaybackProbe reads the real IVideoInfoProvider playback position for a bounded diagnostic sample; buffering, seek and new gestures can invalidate or affect a sample.
+
+IdleLockRequest carries a revocable Binder token and elapsedRealtime timestamp through ordered broadcast, Provider, bound-service and Activity fallback routes. Target touch/pause/resume revokes the token; the owner verifies it just before invoking Root. Provider calls and synchronous Binder transactions run on a serial background executor instead of the host UI thread. The fallback Activity executes Root in the background after resume. Module broadcast work uses the same serial executor instead of creating a thread per request. Existing UID/package/feature/Root checks and compatibility with already injected older clients remain. Cancellation covers work not yet committed to the system input command, not a power-key event already executing.
+
+Root recovery and explicit-force-stop semantics are retained. SecurityCenter's SDK/class-monitor ANR is a separate OEM problem and is not repaired by these changes. Android-version compatibility of the private input receiver requires device verification; the fallback remains available.
+
+## 1.2.32 process recovery
+
+IdleLockRecovery writes an owner-private enable marker and packaged guard script under files/idle-recovery, then launches a detached root shell. The foreground service updates an epoch heartbeat every 10 seconds. The guard checks every 5 seconds and restarts only this package's foreground service if its process is missing or heartbeat is at least 20 seconds old. A PID lock prevents duplicate watchers and stale nonexistent PIDs can be replaced. Explicit owner-user (user 0) package stopped state causes the guard to exit; disabling removes the marker. No global boot files are installed. BootReceiver handles normal boot sync, which was not reboot-tested in this run.
+
+Phone verification: UID-checked kill -9 twice recovered service in 4.29/4.35 seconds; the unchanged Douyin process subsequently locked successfully. Explicit force-stop left no module process throughout 12 seconds and released the guard lock. Disabling in MainActivity removed the marker/lock, stopped the foreground service, and left no guard process. 413 JVM checks plus 12 shell behavior groups and 15 package mapping checks pass. Source-level recovery shell tests use fake Android commands; the process independence and real locking were verified on the phone.
+
+The SecurityCenter ANR is a separately investigated event: remote VirusScanJobService main thread waited for a class monitor held by an engine-readiness waiter. Same-class ANRs predate the new watcher; the engine package was enabled and later completed a scan. See timestamped analysis in UPDATE_SUMMARY; do not infer an OEM fix from the VideoSpeed recovery fix.
+
+<!-- Current lifecycle: internal same-app Activity transitions preserve the last touch timestamp; real background return starts a fresh interval. 114 idle checks + 299 prior checks pass. -->
+## 1.2.31 current Root execution
+
+IdleLockRoot replaces the accessibility gateway. Only the module UID launches su; fixed commands are id -u (45-second authorization timeout) and input keyevent 223 (5-second timeout). Root authorization is private to the module. The dynamic receiver captures getSentFromUid before goAsync clears the receiver PendingResult, then validates UID/package/freshness and invokes the gateway on a worker. Root rejection, timeout and process termination are logged. No accessibility/device-admin fallback locks the screen.
+
+The root command does not solve delivery if the module service is absent. A verified UID-targeted kill test found no process return during its first 12 seconds; automatic recovery is not confirmed. Foreground-service state and normal lock behavior are separate acceptance gates. Previous accessibility and device-admin sections below are historical.
+
+## 1.2.29 historical accessibility implementation
+
+IdleLockAccessibility uses GLOBAL_ACTION_LOCK_SCREEN (API 28+) and removes this module's legacy active admin on connection. It subscribes to no accessibility events and cannot retrieve window contents or perform gestures. No device-admin locking fallback remains. Android's own strong-auth requirements are preserved.
+
+IdleLockChannel on API 34+ uses the public BroadcastOptions share-identity and ordered-broadcast APIs through reflection to retain compileSdk 33. A package-limited dynamic receiver verifies framework-supplied sender UID, supported package ownership and a fresh monotonic timestamp before invoking the shared lock gateway. Acknowledgements report the actual global-action result. IdleLockService keeps the receiver available as a foreground service only while enabled and authorized; START_STICKY and a boot receiver support recovery. MainActivity synchronizes service state after saving/importing settings and returning to foreground. Provider, explicit bound-service and source-authenticated Activity fallbacks use the same gateway for older systems. They were not reachable from the scoped Douyin process on the test phone, even with force-queryable, so are not the successful path on that phone.
+
+112 idle infrastructure/authorization/lifecycle checks pass on JVM stubs, plus 299 prior checks. Accessibility binding and biometric unlock must be established on device; the accessibility gateway is stubbed in the JVM harness. Source checks separately confirm absence of device-admin lockNow in the gateway and the minimal accessibility XML capabilities.
+
 # VideoSpeed 技术全景与微信视频号适配指南
 
 > 文档定位：这是项目的技术总览、教学材料和外部 AI 上下文入口。它解释“系统为什么能工作”，而不是只给出安装步骤。
@@ -592,3 +627,41 @@ Surface 建立后立即及 250/750ms 补设；影片来源更新会清除上一�
 `MainActivity` 上方保存全局速度，下方 ListView 支持名称／包名搜索，显示「跟随全局」或「独立设置」与生效速度。点击应用打开编辑对话框，保存仅写一个包名键，「跟随全局」仅移除该键。显示已安装 App 的系统名称，未安装时使用内建标签；可预先配置全部 15 个已支持包名。沿用原同步 commit 与 speed.xml 可读性处理，不添加权限、服务或接收器。
 
 本机检查：SpeedSettings 79 项、配置桥接 34 项、Douyin 状态 10 项、两个阅读 App 各 34 项，共 191 项 JVM 检查。测试覆盖旧全局资料、独立值隔离、移除覆写、同值覆写保持独立、包名／范围校验、Provider 包名路由与独立值变化检测。未进行本版 Android UI、Provider 真机查询或播放验收；此前版本的实播证据不能当成本版新增功能已验收。
+
+
+## 设置操作与生命周期优化（1.2.25）
+
+`SpeedSettings` 先检查有效覆写，仅在缺失或无效时读取全局，减少独立设置路径的一次偏好读取；包名 Pattern 作为静态常量复用。仅捕获 float 读取的 ClassCastException（例如恢复数据包含 string/int），将该键视为无效，不修改原数据、不尝试宽松转换，其他存储错误不被统一吞掉。NaN 哨兵保留，阅读 App 的失效偏好仍会继续查询 Provider。
+
+微信旧 lastSpeedMap 只写入、读取后没有任何判断，删除整张强引用表不改变设速分支。手动保护时间存入 ManualSpeedCooldown 的同步 WeakHashMap，值只含 Long，避免值反向引用播放器；过期项查询时移除。每实例记录与检查使用 SystemClock.elapsedRealtime，不受系统时间调整影响，3 秒期限保留。Finder 注入路径另有全局手动保护，本轮不修改该路径；既有来源、成功、跳过与异常日志保留。没有测量真机堆大小，不能把代码层的引用修复当作实测内存改善。
+
+设置页全局与独立编辑器复用快捷填入，点击只修改文本，保存才写入原 speed.xml。清单筛选与搜索组合，保存或重置后重新计算列表；恢复 Activity view state 后重新应用筛选。批次重置列出影响数量，明确包含筛选外应用，确认后只删除 xposedscope 中包名对应的 speed.app.* 键，不调用 clear，不修改全局或其他配置。
+
+本机验证共 214 项：SpeedSettings 87、桥接与文件兼容 37、手动保护 12、Douyin 10、两阅读包各 34；新增类型异常、读取短路、Provider 回退与手动期限边界用例。新 UI、旋转后的筛选恢复、批次重置对话框、微信实播与 GC 行为仍待设备验证。本轮 ADB 看见的是 nabu 平板，查询未见模块安装；未在该平板安装或更动设置。
+
+
+## 1.2.26：生命周期隔离与备份
+
+`CurrentPlayer.resolve` 不保存首次或最近播放器。SimPlayer resume 回呼使用自身 thisObject；父级回呼扫描接收者的非 static 实例字段（含父类），只在唯一 SimPlayer 实例可辨识时设速；多个不同实例、不可访问或未知结构时不猜测，记录一次未知所有者提示，prepare/resume/setSpeed 的已知路径保留。独立 resume 安装失败不会阻止其余路径。Bilibili 去除字段顺序依赖，歧义时跳过，并移除模块设速反射失败后的主动抛错。
+
+`TaskGeneration` 用弱键保存 owner 最新 token，实例有新工作时旧 token 失效。微信每个 resume/touch 请求共享一组延迟，后续请求使旧组失效；onPause、Activity finishing/destroyed 会跳过，闭包仅持有 Activity 弱引用。仍保留 350/1200ms resume 和 450ms touch（作者页另有 1200ms）的时机，不移除必要的晚期重试。任务仍可能留在 Looper 队列直到到期，但过期任务不会读取设置或扫描页面。阅读 App 的 Surface 补设用同样机制，媒体来源改变、detach、release 使旧工作失效；既有 rate probe token、Surface 音讯防护与回调补设保留。
+
+`SpeedConfigBridge.refreshSelectedSpeed` 一次读取即返回配置变化后的选中值，未变化则保留原生手动值；旧 hasSpeedChanged API 与测试保留。四处原 check-then-get 路径改用此方法。没有加入时间缓存、轮询间隔或失败退避，避免延迟下一支影片的新设置。
+
+启用标记存于同一个 speed.xml，键为 enabled.app.<packageName>，值为 float 0/1；缺失或异常类型兼容为启用。MainHook 先排除不支持包名，再于目标进程启动读取开关；明确停用时不安装播放器与页面 Hook。启动开关先尝试 XSharedPreferences，缺失后在 Context 可得时查询 Provider enabled 投影，均不可用时保留既有启用行为。没有热卸载 Hook，因此开关变更需目标进程完全重启，普通速度变更仍在下一支影片读取。Provider 原 /speed 和 speed 列不变，仅新增单列 enabled 投影；禁止写入的契约不变。
+
+`SpeedBackup` 使用 version=1 的 UTF-8 key=value 文本，只允许全局 speed、当前支持包名的 speed.app.* 和 enabled.app.*。最多 64KiB 输入，拒绝重复、未知键/包名、错误版本与数值；解析阶段不修改配置。SAF 创建/打开文件，无新权限；预览后以一次 Editor transaction 合并或替换。替换只删除支持包名的两类键，不 clear 其他配置。速度与启用开关以明文导出，不包含其他 App 私有资料。
+
+MainActivity 文件 I/O 与 commit 串行在后台执行；成功写入及原文件可读性处理后才回主线程刷新和提示。重复保存被阻止，Activity 销毁后不操作旧 View；新建设置以解析默认值提供 1.5x，首次未保存时不再同步写入默认键。对话框加 ScrollView；未声称覆盖全部横向或大字号排版。
+
+验证：SpeedSettings 87、Bridge 45、ManualSpeedCooldown 12、Lifecycle/Backup 44、真实 Provider 类 29、Douyin 10、Reader 各 36，共 299 项 JVM 检查。真实 Provider 类仍用 Android API stub，但另有 emulator-5554 Android 36 实际 IPC 与设置操作证据：取消保持 1.5/启用；保存 Phoenix 3.0/停用且全局 1.5；导出含三类值；合并全局 2.2、抖音 1.8 后 Phoenix 3.0/停用不变；替换后 Phoenix 2.2/启用，抖音1.8保留；重复全局键导入被拒绝且原值不变。模拟器最初无本包，已安装本版并覆装最终产物；没有清除任何既有 App 数据或修改手机。Xposed 播放适配、真实 Hook 安装开关、性能/内存量测与完整 UI 旋转恢复仍待手机验收。
+# 1.2.27 idle-lock architecture
+
+- `MainHook.handleLoadPackage` installs `IdleLockHook` after the supported-package gate and before the speed-enable gate. LSPosed injection supplies scope membership; no LSPosed database access or scope changes are needed. The playback adapters remain independent.
+- `IdleTimeout` is a pure Java monotonic state machine. `IdleLockHook` observes base Activity resume/pause/destroy/window focus and Activity/Dialog touch dispatch. The main-thread Handler keeps one pending deadline; weak references avoid retaining Activities or Dialogs. Background/focus loss cancels pending work. A held finger suppresses the deadline until release/cancel. Landscape Activity transitions get a fresh interval. Dialog focus is checked at expiry, including system overlays above dialogs.
+- `SpeedSettings` adds float keys `idle.enabled` (only exact 1 enables; absent/malformed is off) and `idle.minutes` (integer 1–240; absent/malformed defaults to 10). They share the existing LSPosed-readable `speed.xml`; they contain no credentials. The hook reloads a snapshot on foreground/focus entry, without periodic preference polling.
+- `IdleLockAdmin` requests only the `force-lock` device-admin policy. Activation happens in Android's confirmation UI. MainActivity saves the requested enable/minutes only after activation is confirmed; cancellation does not opt the user in. The pending minutes survive Activity recreation.
+- `IdleLockProvider` is separate from the existing read-only speed Provider. Its only side effect is `call("lock", packageName, null)`. The caller UID's PackageManager package list must include the claimed package, and that package must belong to `R.array.xposedscope`. It clears/restores Binder identity only after authorization, checks the persisted feature switch, active admin, interactive screen and unlocked keyguard, then calls `DevicePolicyManager.lockNow()` as the module UID. Unsupported callers cannot issue lock requests. The inactivity/foreground decision is made in the scoped host process; this is not a privileged system-wide input observer.
+- Failed/blocked IPC is logged once per attempted interval; a later user touch can rearm a complete interval. No root shell commands, accessibility service, foreground service or changes to the system screen timeout are used. Actual provider visibility on a particular phone still needs runtime verification.
+- `SpeedBackup` version-1 parsing accepts optional idle keys with strict validation. Export omits absent keys so old settings preserve the previous round-trip shape. Import preview shows the new values. Missing keys preserve the current idle settings even during replace; importing enabled=1 without active admin saves 0. Older app versions reject backups containing the newly added keys.
+- Validation: 85 idle-lock checks (actual Hook/provider/model sources on JVM with infrastructure stubs), plus the existing 299 regression checks and the 15 package-label/manifest mapping checks. Android Debug build and lint are separate checks; actual lock timing, biometric restrictions, package visibility and vendor behavior require phone verification after user activation.

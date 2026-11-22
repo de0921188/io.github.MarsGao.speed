@@ -93,3 +93,6 @@ lint/outputs/
 lint/tmp/
 # lint/reports/
 
+# Local phone-test backups and evidence (contains device-specific settings).
+work/idle-lock-phone-*/
+

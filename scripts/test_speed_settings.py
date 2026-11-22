@@ -32,6 +32,19 @@ for(String bad:new String[]{"", "com", ".app", "com..app", "com.app:push", "com.
 check(!SpeedSettings.isPackageName(bad),"bad package rejected");try{SpeedSettings.appKey(bad);throw new AssertionError("bad key accepted");}catch(IllegalArgumentException expected){checks++;}}
 check(SpeedSettings.isPackageName("io.github.MarsGao.speed"),"package case preserved");
 check(!SpeedSettings.appKey("com.ss.android.ugc.aweme").equals(SpeedSettings.appKey("com.ss.android.ugc.aweme.lite")),"variants have independent settings");
+SpeedSettings.FloatReader brokenCustom=(key,fallback)->{if(key.equals(SpeedSettings.appKey(D)))throw new ClassCastException("string");return key.equals("speed")?2.2f:fallback;};
+check(SpeedSettings.resolve(brokenCustom,D,1.5f)==2.2f,"wrong-type custom inherits global");
+check(Float.isNaN(SpeedSettings.override(brokenCustom,D)),"wrong-type override is not displayed as custom");
+SpeedSettings.FloatReader brokenGlobal=(key,fallback)->{if(key.equals("speed"))throw new ClassCastException("integer");return fallback;};
+check(SpeedSettings.resolve(brokenGlobal,D,1.5f)==1.5f,"wrong-type global uses fallback");
+check(Float.isNaN(SpeedSettings.resolve(brokenGlobal,D,Float.NaN)),"wrong-type reader retains provider fallback sentinel");
+SpeedSettings.FloatReader bothBroken=(key,fallback)->{throw new ClassCastException("bad type");};
+check(SpeedSettings.resolve(bothBroken,D,1.5f)==1.5f,"both malformed values cannot crash resolution");
+int[] reads={0};
+SpeedSettings.FloatReader independent=(key,fallback)->{reads[0]++;if(key.equals("speed"))throw new AssertionError("global read despite valid custom");return 3f;};
+check(SpeedSettings.resolve(independent,D,1.5f)==3f,"valid override does not read broken global");
+check(reads[0]==1,"valid custom needs only one preference lookup");
+try{SpeedSettings.resolve((key,fallback)->{throw new IllegalStateException("unexpected storage failure");},D,1.5f);throw new AssertionError("unexpected failure swallowed");}catch(IllegalStateException expected){checks++;}
 System.out.println(checks+" per-app speed checks passed");
 }}
 '''

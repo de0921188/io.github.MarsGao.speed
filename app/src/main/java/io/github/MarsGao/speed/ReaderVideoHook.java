@@ -32,6 +32,8 @@ final class ReaderVideoHook {
     // Weak keys avoid retaining released players. A config change clears an override.
     private static final Map<Object, Float> customSpeedConfig =
             Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Object, Float> manualValues = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final LongPressSpeedState longPress = new LongPressSpeedState();
     private static final Map<Object, Object> lastParams =
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<Object, Boolean> boundSurfaces =
@@ -45,6 +47,7 @@ final class ReaderVideoHook {
     private static final java.util.concurrent.atomic.AtomicLong rateProbeSequence =
             new java.util.concurrent.atomic.AtomicLong();
     private static boolean installed;
+    private static final TaskGeneration surfaceTasks = new TaskGeneration();
 
     private ReaderVideoHook() { }
 
@@ -57,6 +60,10 @@ final class ReaderVideoHook {
         installed = true;
         String tag = pkg.packageName + "/" + pkg.processName;
         log(tag, "initializing TTVideoEngine adapter");
+        LongPressGestureHook.install(longPress, tag, () -> {
+            long generation = longPress.generation();
+            new Handler(Looper.getMainLooper()).post(() -> restoreHeldPlayers(speed, tag, generation));
+        });
         // Include secondary processes: video playback need not run in the main process.
         try {
             XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class,
@@ -92,17 +99,39 @@ final class ReaderVideoHook {
                         float target = speed.get();
                         float requested = (float) XposedHelpers.callMethod(param.args[0], "getSpeed");
                         if (!Float.isFinite(requested) || requested <= 0f) return;
+                        if (hasVideoSurface(param.thisObject)) {
+                            float selected = hasCustomSpeed(param.thisObject, target)
+                                    ? manualValues.getOrDefault(param.thisObject, target) : target;
+                            float temporary = longPress.resolve(param.thisObject, requested, selected, SystemClock.elapsedRealtime());
+                            if (!Float.isNaN(temporary)) {
+                                XposedHelpers.callMethod(param.args[0], "setSpeed", temporary);
+                                log(tag, "temporary requested=" + requested + " applied=" + temporary);
+                                if (requested == 1f) {
+                                    WeakReference<Object> player = new WeakReference<>(param.thisObject);
+                                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                        Object current = player.get();
+                                        if (current != null && !Boolean.TRUE.equals(released.get(current))) probePlaybackRate(current, speed, tag);
+                                    }, 200L);
+                                }
+                                return;
+                            }
+                        }
                         if (Math.abs(requested - 1f) >= 0.001f
                                 && !Boolean.TRUE.equals(newMediaPending.get(param.thisObject))) {
                             // Preserve non-default speeds, without guessing from UI call stacks.
                             if (Math.abs(requested - target) >= 0.001f) {
                                 customSpeedConfig.put(param.thisObject, target);
-                                log(tag, "preserving app speed=" + requested + ", target=" + target);
+                                manualValues.put(param.thisObject, requested);
+                                log(tag, "preserving app speed=" + requested + ", target=" + target
+                                        + ", " + longPress.diagnostic(SystemClock.elapsedRealtime()));
                             }
                             return;
                         }
-                        if (hasCustomSpeed(param.thisObject, target)
-                                || !hasVideoSurface(param.thisObject)) return;
+                        if (hasCustomSpeed(param.thisObject, target)) {
+                            manualValues.put(param.thisObject, requested);
+                            return;
+                        }
+                        if (!hasVideoSurface(param.thisObject)) return;
                         // Mutate only speed, preserving pitch and all other supplied parameters.
                         applying.set(true);
                         XposedHelpers.callMethod(param.args[0], "setSpeed", target);
@@ -139,6 +168,9 @@ final class ReaderVideoHook {
                             protected void afterHookedMethod(MethodHookParam param) {
                                 if (param.hasThrowable() || param.args[0] == null) return;
                                 customSpeedConfig.remove(param.thisObject);
+                                manualValues.remove(param.thisObject);
+                                longPress.forget(param.thisObject);
+                                surfaceTasks.invalidate(param.thisObject);
                                 newMediaPending.put(param.thisObject, true);
                                 rateProbeTokens.remove(param.thisObject);
                                 log(tag, "new media via " + name);
@@ -175,6 +207,7 @@ final class ReaderVideoHook {
                         protected void afterHookedMethod(MethodHookParam param) {
                             if (param.hasThrowable()) return;
                             if (param.args[0] == null) {
+                                surfaceTasks.invalidate(param.thisObject);
                                 boundSurfaces.remove(param.thisObject);
                                 rateProbeTokens.remove(param.thisObject);
                                 return;
@@ -184,11 +217,13 @@ final class ReaderVideoHook {
                             applySpeed(param.thisObject, params, setter, speed, tag, name);
                             // The first engine may create native playback asynchronously, after play().
                             WeakReference<Object> player = new WeakReference<>(param.thisObject);
+                            long token = surfaceTasks.next(param.thisObject);
                             Handler handler = new Handler(Looper.getMainLooper());
                             for (long delay : new long[]{250L, 750L}) {
                                 handler.postDelayed(() -> {
                                     Object current = player.get();
-                                    if (current != null && Boolean.TRUE.equals(boundSurfaces.get(current))) {
+                                    if (surfaceTasks.isCurrent(current, token)
+                                            && Boolean.TRUE.equals(boundSurfaces.get(current))) {
                                         applySpeed(current, params, setter, speed, tag, name + "+" + delay);
                                     }
                                 }, delay);
@@ -204,9 +239,12 @@ final class ReaderVideoHook {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         released.put(param.thisObject, true);
+                        surfaceTasks.invalidate(param.thisObject);
                         boundSurfaces.remove(param.thisObject);
                         lastParams.remove(param.thisObject);
                         customSpeedConfig.remove(param.thisObject);
+                        manualValues.remove(param.thisObject);
+                        longPress.forget(param.thisObject);
                         newMediaPending.remove(param.thisObject);
                         rateProbeTokens.remove(param.thisObject);
                     }
@@ -246,6 +284,24 @@ final class ReaderVideoHook {
                     log(tag, "callback " + name + " hook failed: " + error);
                 }
             }
+        }
+    }
+
+    private static void restoreHeldPlayers(Supplier<Float> speed, String tag, long generation) {
+        if (generation != longPress.generation() || longPress.touching()) return;
+        for (Object player : longPress.players()) {
+            if (!hasVideoSurface(player)) continue;
+            Object playback = lastParams.get(player);
+            if (playback == null) continue;
+            try {
+                float target = speed.get();
+                float selected = hasCustomSpeed(player, target) ? manualValues.getOrDefault(player, target) : target;
+                XposedHelpers.callMethod(playback, "setSpeed", selected);
+                // Use the adapter's exact setter; the host may omit its release reset entirely.
+                player.getClass().getMethod("setPlaybackParams", playback.getClass()).invoke(player, playback);
+                log(tag, "release restored=" + selected);
+                probePlaybackRate(player, speed, tag);
+            } catch (Throwable error) { log(tag, "release restore failed: " + error); }
         }
     }
 
@@ -324,6 +380,7 @@ final class ReaderVideoHook {
             if (previousConfig == null) return false;
             if (Math.abs(previousConfig - target) < 0.001f) return true;
             customSpeedConfig.remove(player);
+            manualValues.remove(player);
             return false;
         }
     }

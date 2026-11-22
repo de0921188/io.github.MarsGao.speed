@@ -34,4 +34,9 @@
         <item>Telegram</item>
         <item>微信视频号</item>
     </string-array>
+    <string-array name="app_filters">
+        <item>全部支持的应用</item>
+        <item>已安装的应用</item>
+        <item>独立设置的应用</item>
+    </string-array>
 </resources>

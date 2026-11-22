@@ -43,6 +43,27 @@ final class SpeedConfigBridge {
     private SpeedConfigBridge() {
     }
 
+    /** Process-start switch: absent flags preserve all existing hook behavior. */
+    static boolean enabledAtStartup(XSharedPreferences preferences, String packageName) {
+        preferences.reload();
+        float flag = SpeedSettings.enabledValue(preferences::getFloat, packageName, Float.NaN);
+        if (!Float.isNaN(flag)) return flag != 0f;
+        Context context = resolveContext();
+        if (context != null) {
+            try (Cursor cursor = context.getContentResolver().query(
+                    SpeedConfigProvider.uriForPackage(packageName),
+                    new String[]{SpeedConfigProvider.COLUMN_ENABLED}, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    int column = cursor.getColumnIndexOrThrow(SpeedConfigProvider.COLUMN_ENABLED);
+                    return cursor.getFloat(column) != 0f;
+                }
+            } catch (Throwable error) {
+                XposedBridge.log("[VideoSpeed] [Config] startup switch unavailable: " + error);
+            }
+        }
+        return true;
+    }
+
     static void setContext(Context context) {
         if (context != null) {
             Context appContext = context.getApplicationContext();
@@ -76,6 +97,13 @@ final class SpeedConfigBridge {
         lastProviderSpeed = latest;
         // Compare values independently of reload(), which consumes file-change metadata.
         return previous == null || Math.abs(previous - latest) >= 0.001f;
+    }
+
+    static synchronized float refreshSelectedSpeed(XSharedPreferences legacyPrefs, float selected) {
+        float latest = getSpeed(legacyPrefs, 1.5f);
+        Float previous = lastProviderSpeed;
+        lastProviderSpeed = latest;
+        return previous == null || Math.abs(previous - latest) >= 0.001f ? latest : selected;
     }
 
     private static Float readProviderSpeed() {

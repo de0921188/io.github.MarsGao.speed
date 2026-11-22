@@ -1,0 +1,2 @@
+# Android executes this packaged resource directly with /system/bin/sh.
+app/src/main/res/raw/idle_recovery.sh text eol=lf

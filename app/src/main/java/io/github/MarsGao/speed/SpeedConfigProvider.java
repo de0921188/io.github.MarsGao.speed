@@ -15,6 +15,7 @@ public class SpeedConfigProvider extends ContentProvider {
     public static final String AUTHORITY = "io.github.MarsGao.speed.config";
     public static final String PATH_SPEED = "speed";
     public static final String COLUMN_SPEED = "speed";
+    public static final String COLUMN_ENABLED = "enabled";
     public static final Uri SPEED_URI = Uri.parse("content://" + AUTHORITY + "/" + PATH_SPEED);
     private static final float DEFAULT_SPEED = 1.5f;
     static final String QUERY_PACKAGE = "package";
@@ -41,8 +42,11 @@ public class SpeedConfigProvider extends ContentProvider {
             throw new IllegalArgumentException("Invalid package name");
         }
         float speed = SpeedSettings.resolve(prefs::getFloat, packageName, DEFAULT_SPEED);
-        MatrixCursor cursor = new MatrixCursor(new String[]{COLUMN_SPEED}, 1);
-        cursor.addRow(new Object[]{speed});
+        boolean enabledOnly = projection != null && projection.length == 1
+                && COLUMN_ENABLED.equals(projection[0]);
+        MatrixCursor cursor = new MatrixCursor(new String[]{enabledOnly ? COLUMN_ENABLED : COLUMN_SPEED}, 1);
+        cursor.addRow(new Object[]{enabledOnly
+                ? SpeedSettings.enabledValue(prefs::getFloat, packageName, 1f) : speed});
         return cursor;
     }
 

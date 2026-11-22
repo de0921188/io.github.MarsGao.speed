@@ -7,6 +7,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
+    "android/annotation/SuppressLint.java": 'package android.annotation;public @interface SuppressLint {String[] value();}',
+    'android/view/MotionEvent.java': 'package android.view;public class MotionEvent {public static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_CANCEL=3,ACTION_OUTSIDE=4;private int a;public MotionEvent(int v){a=v;}public int getActionMasked(){return a;}public long getDownTime(){return android.os.SystemClock.now;}public long getEventTime(){return android.os.SystemClock.now;}}',
+    'android/app/Activity.java': 'package android.app;public class Activity {public void onResume(){}public void onPause(){} public boolean dispatchTouchEvent(android.view.MotionEvent e){try{de.robv.android.xposed.XposedBridge.before(Activity.class.getMethod("dispatchTouchEvent",android.view.MotionEvent.class),this,e);}catch(Exception x){throw new RuntimeException(x);}return true;}}',
+
     'android/os/SystemClock.java': 'package android.os;public class SystemClock {public static long now=10000;public static long elapsedRealtime(){return now;}}',
     'android/view/Surface.java': 'package android.view; public class Surface {}',
     'android/view/SurfaceHolder.java': 'package android.view; public interface SurfaceHolder {}',
@@ -16,6 +20,7 @@ import java.util.*;
 public class Handler {
 static final List<Runnable> pending=new ArrayList<>();
 public Handler(Looper l){}
+public boolean post(Runnable r){pending.add(r);return true;}
 public boolean postDelayed(Runnable r,long delay){pending.add(r);return true;}
 public static void runPending(){List<Runnable> copy=new ArrayList<>(pending);pending.clear();for(Runnable r:copy)r.run();}
 }''',
@@ -112,6 +117,12 @@ import com.ss.ttm.player.PlaybackParams;
 import de.robv.android.xposed.*;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 public class ReaderVideoHookTest {
+public static class FullscreenActivity extends android.app.Activity {
+@Override public boolean dispatchTouchEvent(android.view.MotionEvent e) {
+try{XposedBridge.before(FullscreenActivity.class.getMethod("dispatchTouchEvent",android.view.MotionEvent.class),this,e);}
+catch(Exception x){throw new RuntimeException(x);}return true; // Consumes without calling super.
+}
+}
 public static class ReadyListener implements com.ss.ttvideoengine.VideoEngineListener {
 public void onPrepared(TTVideoEngine engine) {} public void onRenderStart(TTVideoEngine engine) {}
 }
@@ -128,9 +139,9 @@ check(!ReaderVideoHook.supports("other.app"),"other scope");
 XC_LoadPackage.LoadPackageParam pkg=new XC_LoadPackage.LoadPackageParam();
 pkg.packageName=args[0];pkg.processName=args[0]+":video";pkg.classLoader=ReaderVideoHookTest.class.getClassLoader();
 ReaderVideoHook.install(pkg,()->target);
-check(XposedBridge.hooks.size()==11,"lifecycle, surface, source, listener and release hooks");
+check(XposedBridge.hooks.size()==14,"lifecycle, surface, source, listener and release hooks");
 ReaderVideoHook.install(pkg,()->target);
-check(XposedBridge.hooks.size()==11,"no duplicate hooks");
+check(XposedBridge.hooks.size()==14,"no duplicate hooks");
 TTVideoEngine audio=new TTVideoEngine();audio.video=false;
 PlaybackParams audioParams=new PlaybackParams();audio.setPlaybackParams(audioParams);
 lifecycle(audio,"play");check(audioParams.speed==1f,"audio default untouched");
@@ -201,6 +212,52 @@ TTVideoEngine measured=new TTVideoEngine();
 XposedBridge.after(ReadyListener.class.getMethod("onRenderStart",TTVideoEngine.class),ready,measured);
 measured.playbackTime=6000;android.os.SystemClock.now+=2000;android.os.Handler.runPending();
 check(XposedBridge.logs.stream().anyMatch(l->l.contains("rateProbe mediaMs=6000, wallMs=2000, ratio=3.0")),"probe compares real progress with monotonic time");
+android.os.Handler.runPending();
+TTVideoEngine replaced=new TTVideoEngine();
+replaced.setSurface(new android.view.Surface());
+replaced.setVideoID("next-media");
+int writesAfterSource=replaced.writes;
+android.os.Handler.runPending();
+check(replaced.writes==writesAfterSource,"old surface retry invalid after media switch");
+TTVideoEngine rebound=new TTVideoEngine();
+rebound.setSurface(new android.view.Surface());
+rebound.setSurface(null);rebound.setSurface(new android.view.Surface());
+int writesAfterRebind=rebound.writes;
+android.os.Handler.runPending();
+check(rebound.writes==writesAfterRebind+2,"only newest surface retries apply after detach/rebind");
+TTVideoEngine pressPlayer=new TTVideoEngine();target=1.36f;
+android.app.Activity activity=new android.app.Activity();
+activity.dispatchTouchEvent(new android.view.MotionEvent(0));android.os.SystemClock.now+=303;
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(2f));check(pressPlayer.last.speed==2f,"held boost allowed");
+activity.dispatchTouchEvent(new android.view.MotionEvent(1));
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(1f));check(pressPlayer.last.speed==target,"release restores default instead of creating manual override");
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(1f));check(pressPlayer.last.speed==target,"duplicate asynchronous release restored");
+android.os.SystemClock.now+=1500;pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(2.5f));
+activity.dispatchTouchEvent(new android.view.MotionEvent(0));android.os.SystemClock.now+=303;
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(2f));check(pressPlayer.last.speed==2f,"held boost from native manual value");
+activity.dispatchTouchEvent(new android.view.MotionEvent(3));pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(1f));
+check(pressPlayer.last.speed==2.5f,"cancel restores genuine prior manual speed");
+activity.dispatchTouchEvent(new android.view.MotionEvent(0));activity.dispatchTouchEvent(new android.view.MotionEvent(1));
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(1f));check(pressPlayer.last.speed==1f,"new genuine manual normal-speed reset preserved");
+FullscreenActivity full=new FullscreenActivity();
+Method resume=android.app.Activity.class.getDeclaredMethod("onResume");
+XposedBridge.after(resume,full);
+int hookCount=XposedBridge.hooks.size();XposedBridge.after(resume,full);
+check(XposedBridge.hooks.size()==hookCount,"resuming fullscreen twice does not duplicate touch hooks");
+pressPlayer.setVideoID("fullscreen-episode");
+full.dispatchTouchEvent(new android.view.MotionEvent(0));android.os.SystemClock.now+=303;
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(2f));
+check(pressPlayer.last.speed==2f,"fullscreen override without super allows held boost");
+full.dispatchTouchEvent(new android.view.MotionEvent(1));
+android.os.Handler.runPending();
+check(pressPlayer.last.speed==target,"release actively restores even without native reset callback");
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(1f));
+check(pressPlayer.last.speed==target,"fullscreen override without super restores configured speed");
+full.dispatchTouchEvent(new android.view.MotionEvent(0));android.os.SystemClock.now+=303;
+pressPlayer.setPlaybackParams(new PlaybackParams().setSpeed(2f));
+XposedBridge.before(android.app.Activity.class.getDeclaredMethod("onPause"),full);
+android.os.Handler.runPending();
+check(pressPlayer.last.speed==target,"background during held gesture restores selected speed without UP");
 System.out.println(args[0]+": "+checks+" checks passed (JVM stubs, not device playback)");
 }
 }''',
@@ -219,6 +276,11 @@ def main():
             path.write_text(content, encoding='utf8')
         shutil.copyfile(ROOT / 'app/src/main/java/io/github/MarsGao/speed/ReaderVideoHook.java',
                         folder / 'io/github/MarsGao/speed/ReaderVideoHook.java')
+        shutil.copyfile(ROOT / 'app/src/main/java/io/github/MarsGao/speed/TaskGeneration.java',
+                        folder / 'io/github/MarsGao/speed/TaskGeneration.java')
+        shutil.copyfile(ROOT / 'app/src/main/java/io/github/MarsGao/speed/LongPressSpeedState.java',folder / 'io/github/MarsGao/speed/LongPressSpeedState.java')
+        for extra in ('LongPressGestureHook','WindowInputHook'):
+            shutil.copyfile(ROOT / ('app/src/main/java/io/github/MarsGao/speed/'+extra+'.java'),folder / ('io/github/MarsGao/speed/'+extra+'.java'))
         subprocess.run([tool('javac'), '--release', '11', '-d', str(folder / 'out'),
                         *map(str, folder.rglob('*.java'))], check=True)
         for package in ('com.kylin.read', 'com.phoenix.read'):

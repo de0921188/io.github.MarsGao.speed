@@ -54,9 +54,6 @@ public class MainHook implements IXposedHookLoadPackage {
     private static float getWeChatSpeedConfig() {
         return SpeedConfigBridge.getSpeed(prefs, 1.5f);
     }
-    private static boolean hasSpeedConfigChanged() {
-        return SpeedConfigBridge.hasSpeedChanged(prefs);
-    }
 
     private static void hookApplicationContext() {
         XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
@@ -69,6 +66,16 @@ public class MainHook implements IXposedHookLoadPackage {
 
     @Override
     public void handleLoadPackage(final XC_LoadPackage.LoadPackageParam lpparam) {
+        if (!ReaderVideoHook.supports(lpparam.packageName)
+                && !java.util.Arrays.asList(hookPackageBili0, hookPackageBili1, hookPackageTw,
+                hookPackageDy0, hookPackageDy1, hookPackageDy2, hookPackageDy3, hookPackageRed,
+                hookPackageWb, hookPackageIg0, hookPackageIg1, hookPackageTg, hookPackageWx)
+                .contains(lpparam.packageName)) return;
+        IdleLockHook.install(prefs);
+        if (!SpeedConfigBridge.enabledAtStartup(prefs, lpparam.packageName)) {
+            XposedBridge.log("[VideoSpeed] disabled for " + lpparam.packageName + "/" + lpparam.processName);
+            return;
+        }
         if (ReaderVideoHook.supports(lpparam.packageName)) {
             SpeedConfigBridge.setTargetPackage(lpparam.packageName);
             SpeedConfigBridge.useReaderPreferences();
@@ -162,9 +169,36 @@ public class MainHook implements IXposedHookLoadPackage {
                                                             Field[] fields = param.thisObject.getClass().getDeclaredFields();
                                                             XposedBridge.log("found fields s0 count: " + fields.length);
 
-                                                            Field field = param.thisObject.getClass().getDeclaredFields()[0];
-                                                            field.setAccessible(true);
-                                                            Class<?> s0 = field.get(param.thisObject).getClass();
+                                                            Class<?> s0 = null;
+                                                            for (Field field : fields) {
+                                                                try {
+                                                                    field.setAccessible(true);
+                                                                    Object candidate = field.get(param.thisObject);
+                                                                    if (candidate == null) continue;
+                                                                    Class<?> type = candidate.getClass();
+                                                                    if (XposedHelpers.findMethodExactIfExists(type, "resume") == null) continue;
+                                                                    boolean speedSetter = false;
+                                                                    for (Method candidateMethod : type.getDeclaredMethods()) {
+                                                                        if (candidateMethod.getReturnType() == void.class
+                                                                                && java.util.Arrays.equals(candidateMethod.getParameterTypes(), new Class<?>[]{float.class})) {
+                                                                            speedSetter = true;
+                                                                            break;
+                                                                        }
+                                                                    }
+                                                                    if (!speedSetter) continue;
+                                                                    if (s0 != null && s0 != type) {
+                                                                        XposedBridge.log("[VideoSpeed] bili ambiguous player fields; skipping");
+                                                                        return;
+                                                                    }
+                                                                    s0 = type;
+                                                                } catch (Throwable error) {
+                                                                    XposedBridge.log("[VideoSpeed] bili field unavailable: " + error);
+                                                                }
+                                                            }
+                                                            if (s0 == null) {
+                                                                XposedBridge.log("[VideoSpeed] bili player field not found");
+                                                                return;
+                                                            }
                                                             XposedBridge.log("chosen fields s0: " + s0);
 
                                                             for (Method method : s0.getDeclaredMethods()) {
@@ -201,19 +235,17 @@ public class MainHook implements IXposedHookLoadPackage {
                                                                     @Override
                                                                     protected void afterHookedMethod(MethodHookParam param) {
                                                                         Object thisObject = param.thisObject;
-                                                                        if (hasSpeedConfigChanged()) {
-                                                                            speedConfig[0] = getSpeedConfig();
-                                                                        }
+                                                                        speedConfig[0] = SpeedConfigBridge.refreshSelectedSpeed(prefs, speedConfig[0]);
                                                                         try {
                                                                             method.invoke(thisObject, speedConfig[0]);
                                                                         } catch (
                                                                                 IllegalAccessException e) {
                                                                             // should not happen
                                                                             XposedBridge.log(e);
-                                                                            throw new IllegalAccessError(e.getMessage());
+                                                                            // A failed module setter must not interrupt host playback.
                                                                         } catch (
                                                                                 InvocationTargetException e) {
-                                                                            throw new RuntimeException(e);
+                                                                            XposedBridge.log("[VideoSpeed] bili setter failed: " + e);
                                                                         }
                                                                         XposedBridge.log("bili setSpeed: " + speedConfig[0]);
                                                                     }
@@ -244,14 +276,66 @@ public class MainHook implements IXposedHookLoadPackage {
             } else if (douyin) {
                 try {
                     DouyinSpeedState speedState = new DouyinSpeedState(MainHook::getSpeedConfig);
-                    Boolean[] resumeHooked = {false};
+                    LongPressSpeedState longPress = new LongPressSpeedState();
+                    java.util.Map<Object, String> heldPlayers = java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+                    LongPressGestureHook.install(longPress, "douyin", () -> {
+                        long generation = longPress.generation();
+                        new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
+                            if (generation != longPress.generation() || longPress.touching()) return;
+                            java.util.Map<Object, String> snapshot;
+                            synchronized (heldPlayers) { snapshot = new java.util.HashMap<>(heldPlayers); heldPlayers.clear(); }
+                            for (java.util.Map.Entry<Object, String> entry : snapshot.entrySet()) {
+                                try {
+                                    float selected = speedState.current();
+                                    XposedHelpers.callMethod(entry.getKey(), entry.getValue(), selected);
+                                    XposedBridge.log("[VideoSpeed] douyin release restored=" + selected);
+                                    if ("setSpeed".equals(entry.getValue())) DouyinPlaybackProbe.sample(entry.getKey(), selected, longPress);
+                                } catch (Throwable error) { XposedBridge.log("[VideoSpeed] douyin release restore failed: " + error); }
+                            }
+                        });
+                    });
+                    for (String backend : new String[]{
+                            "com.ss.android.ugc.aweme.player.sdk.impl.SimplifyPlayerImpl",
+                            "com.ss.android.ugc.aweme.player.sdk.impl.SimplifyAsyncPlayer"}) {
+                        try {
+                            XposedHelpers.findAndHookMethod(backend, lpparam.classLoader, "setPlaySpeed", float.class, new XC_MethodHook() {
+                                @Override protected void beforeHookedMethod(MethodHookParam p) {
+                                    float requested = (float) p.args[0], selected = speedState.current();
+                                    float temporary = longPress.resolve(requested, selected, android.os.SystemClock.elapsedRealtime());
+                                    if (!Float.isNaN(temporary) && longPress.touching()) heldPlayers.put(p.thisObject, "setPlaySpeed");
+                                    if (!Float.isNaN(temporary)) p.args[0] = temporary;
+                                    else if (requested == 1f) p.args[0] = selected;
+                                    XposedBridge.log("[VideoSpeed] douyin backend=" + backend + " requested="
+                                            + requested + " applied=" + p.args[0]);
+                                }
+                            });
+                        } catch (XposedHelpers.ClassNotFoundError | NoSuchMethodError unavailable) {
+                            XposedBridge.log("[VideoSpeed] douyin backend unavailable " + backend + ": " + unavailable);
+                        }
+                    }
+                    java.util.concurrent.atomic.AtomicBoolean resumeHooked = new java.util.concurrent.atomic.AtomicBoolean();
+                    CurrentPlayer activePlayer = new CurrentPlayer();
+                    java.util.concurrent.atomic.AtomicBoolean unknownOwnerLogged = new java.util.concurrent.atomic.AtomicBoolean();
+                    Class<?> simPlayerClass = XposedHelpers.findClass("com.ss.android.ugc.aweme.video.simplayer.SimPlayer", lpparam.classLoader);
+                    try {
+                    XposedHelpers.findAndHookMethod(simPlayerClass, "resume", new XC_MethodHook() {
+                        @Override protected void afterHookedMethod(MethodHookParam param) {
+                            float speed = speedState.current();
+                            XposedHelpers.callMethod(param.thisObject, "setSpeed", speed);
+                            XposedBridge.log("douyin resume current player speed=" + speed);
+                        }
+                    });
+                    } catch (Throwable error) {
+                        XposedBridge.log("[VideoSpeed] douyin resume unavailable; prepare/setSpeed remain active: " + error);
+                    }
+
 
                     XposedHelpers.findAndHookMethod("com.ss.android.ugc.aweme.video.simplayer.SimPlayer", lpparam.classLoader, "prepare", "com.ss.android.ugc.aweme.video.PlayRequest", new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             Object thisObject = param.thisObject;
 
-                            if (!resumeHooked[0]) {
+                            if (resumeHooked.compareAndSet(false, true)) {
                                 StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
                                 for (int i = 4; i <= 7 && i + 1 < stackTraceElements.length; i++) {
                                     if (stackTraceElements[i].getMethodName().equals("prepare")) {
@@ -264,17 +348,22 @@ public class MainHook implements IXposedHookLoadPackage {
                                                 @Override
                                                 protected void afterHookedMethod(MethodHookParam param) {
                                                     float speed = speedState.current();
-                                                    XposedHelpers.callMethod(thisObject, "setSpeed", speed);
+                                                    Object current = activePlayer.resolve(param.thisObject, simPlayerClass);
+                                                    if (current == null) {
+                                                        if (unknownOwnerLogged.compareAndSet(false, true)) {
+                                                            XposedBridge.log("[VideoSpeed] douyin parent callback has no unique player; skipping");
+                                                        }
+                                                        return;
+                                                    }
+                                                    XposedHelpers.callMethod(current, "setSpeed", speed);
                                                     XposedBridge.log("douyin setSpeed1: " + speed);
                                                 }
                                             };
                                             XposedBridge.hookMethod(methods[0], mh);
-                                            XposedHelpers.findAndHookMethod("com.ss.android.ugc.aweme.video.simplayer.SimPlayer", lpparam.classLoader, "resume", mh);
                                             XposedBridge.log("hooked douyin resume");
                                         }
                                     }
                                 }
-                                resumeHooked[0] = true;
                             }
 
                             float speed = speedState.current();
@@ -287,6 +376,13 @@ public class MainHook implements IXposedHookLoadPackage {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             float selectedSpeed = speedState.current();
+                            float temporary = longPress.resolve((float) param.args[0], selectedSpeed, android.os.SystemClock.elapsedRealtime());
+                            if (!Float.isNaN(temporary)) {
+                                if (longPress.touching()) heldPlayers.put(param.thisObject, "setSpeed");
+                                XposedBridge.log("[VideoSpeed] douyin temporary requested=" + param.args[0] + " applied=" + temporary);
+                                param.args[0] = temporary;
+                                return;
+                            }
                             if ((float) param.args[0] != selectedSpeed) {
                                 StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
                                 if (stackTraceElements.length <= 24) {
@@ -354,9 +450,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     protected void afterHookedMethod(MethodHookParam param) {
                         Object thisObject = param.thisObject;
 //                        float currentSpeed = (float) XposedHelpers.callMethod(thisObject, "getSpeed", 0.0f);
-                        if (hasSpeedConfigChanged()) {
-                            speedConfig[0] = getSpeedConfig();
-                        }
+                        speedConfig[0] = SpeedConfigBridge.refreshSelectedSpeed(prefs, speedConfig[0]);
                         XposedHelpers.callMethod(thisObject, "setSpeed", speedConfig[0]);
                         XposedBridge.log("red setSpeed: " + speedConfig[0]);
                     }
@@ -433,9 +527,7 @@ public class MainHook implements IXposedHookLoadPackage {
 //                        XposedBridge.log("setSpeed arg0: " + (int)param.args[0] + " arg1: " + (int)param.args[1]);
                         if ((int)param.args[0] == 13 && (int)param.args[1] == 0) {
                             Object thisObject = param.thisObject;
-                            if (hasSpeedConfigChanged()) {
-                                speedConfig[0] = getSpeedConfig();
-                            }
+                            speedConfig[0] = SpeedConfigBridge.refreshSelectedSpeed(prefs, speedConfig[0]);
                             XposedHelpers.callMethod(thisObject, "setSpeed", speedConfig[0]);
                             XposedBridge.log("weibo setSpeed0: " + speedConfig[0]);
                         }
@@ -463,9 +555,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         Object thisObject = param.thisObject;
-                        if (hasSpeedConfigChanged()) {
-                            speedConfig[0] = getSpeedConfig();
-                        }
+                        speedConfig[0] = SpeedConfigBridge.refreshSelectedSpeed(prefs, speedConfig[0]);
                         XposedHelpers.callMethod(thisObject, "setSpeed", speedConfig[0]);
                         XposedBridge.log("weibo setSpeed1: " + speedConfig[0]);
                     }
@@ -569,8 +659,9 @@ public class MainHook implements IXposedHookLoadPackage {
                                     if (param.args.length > 0 && param.args[0] instanceof Float) {
                                         float speed = (float) param.args[0];
                                         if (Math.abs(speed - 1.0f) < 0.01f) {
-                                            param.args[0] = getSpeedConfig();
-                                            XposedBridge.log("tg speed intercepted: " + getSpeedConfig());
+                                            float configured = getSpeedConfig();
+                                            param.args[0] = configured;
+                                            XposedBridge.log("tg speed intercepted: " + configured);
                                         }
                                     }
                                 }
@@ -594,8 +685,9 @@ public class MainHook implements IXposedHookLoadPackage {
                                         if (param.args[0] instanceof Float) {
                                             float speed = (float) param.args[0];
                                             if (Math.abs(speed - 1.0f) < 0.01f) {
-                                                param.args[0] = getSpeedConfig();
-                                                XposedBridge.log("tg VideoPlayer speed set: " + getSpeedConfig());
+                                                float configured = getSpeedConfig();
+                                                param.args[0] = configured;
+                                                XposedBridge.log("tg VideoPlayer speed set: " + configured);
                                             }
                                         }
                                     }
@@ -1024,7 +1116,8 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final java.util.Map<String, Boolean> wxDiscoveredClassNames = new ConcurrentHashMap<>();
     private static final java.util.Map<String, Boolean> wxHookedClassNames = new ConcurrentHashMap<>();
     private static final java.util.Map<String, Integer> wxResIdCache = new ConcurrentHashMap<>();
-    private static volatile long wxLastManualSpeedChangeAt = 0L;
+    private static volatile long wxLastManualSpeedChangeAt = -1L;
+    private static final TaskGeneration wxActivityTasks = new TaskGeneration();
     private static final ThreadLocal<Boolean> wxApplyingSpeed = new ThreadLocal<>();
 
     private static int getWeChatResId(Context context, String name, String defType, int fallbackId) {
@@ -1055,8 +1148,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
                     if (isWeChatFinderActivity(param.thisObject)) {
-                        scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.onResume", 350);
-                        scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.onResume", 1200);
+                        scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.onResume", 350, 1200);
                     }
                 }
             });
@@ -1066,14 +1158,17 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (isWeChatFinderActivity(param.thisObject) && param.args[0] instanceof android.view.MotionEvent) {
                         android.view.MotionEvent event = (android.view.MotionEvent)param.args[0];
                         if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
-                            scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.touchUp", 450);
-                            if (param.thisObject.getClass().getName().equals(
-                                    "com.tencent.mm.plugin.finder.feed.ui.FinderProfileTimeLineUI")) {
-                                scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject,
-                                        "FinderActivity.touchUp", 1200);
-                            }
+                            boolean profile = param.thisObject.getClass().getName().equals(
+                                    "com.tencent.mm.plugin.finder.feed.ui.FinderProfileTimeLineUI");
+                            scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject,
+                                    "FinderActivity.touchUp", profile ? new long[]{450, 1200} : new long[]{450});
                         }
                     }
+                }
+            });
+            XposedHelpers.findAndHookMethod(android.app.Activity.class, "onPause", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    wxActivityTasks.invalidate(param.thisObject);
                 }
             });
             logWeChatHook("[FinderInject] Activity resume/touch hooks installed");
@@ -1100,7 +1195,7 @@ public class MainHook implements IXposedHookLoadPackage {
                                     try {
                                         Object tag = ((android.view.View)param.args[0]).getTag();
                                         if (tag instanceof Float) {
-                                            wxLastManualSpeedChangeAt = System.currentTimeMillis();
+                                            wxLastManualSpeedChangeAt = android.os.SystemClock.elapsedRealtime();
                                             logWeChatHook("[FinderInject] manual speed menu click: " + tag);
                                         }
                                     } catch (Throwable e) {
@@ -1287,7 +1382,6 @@ public class MainHook implements IXposedHookLoadPackage {
             for (String methodName : directMethods) {
                 try {
                     XposedHelpers.callMethod(player, methodName, targetSpeed);
-                    lastSpeedMap.put(player, targetSpeed);
                     logWeChatHook(source + " setRate target via " + methodName + ": " + targetSpeed);
                     return;
                 } catch (Throwable ignored) {
@@ -1298,7 +1392,6 @@ public class MainHook implements IXposedHookLoadPackage {
             if (playbackParameters != null) {
                 try {
                     XposedHelpers.callMethod(player, "setPlaybackParameters", playbackParameters);
-                    lastSpeedMap.put(player, targetSpeed);
                     logWeChatHook(source + " setPlaybackParameters target: " + targetSpeed);
                 } catch (Throwable e) {
                     logWeChatHook(source + " setPlaybackParameters failed: " + e.getMessage());
@@ -1317,14 +1410,19 @@ public class MainHook implements IXposedHookLoadPackage {
                         name.equals("com.tencent.mm.plugin.finder.feed.ui.FinderProfileTimeLineUI"));
     }
 
-    private static void scheduleApplyWeChatFinderCurrentSpeed(android.app.Activity activity, String source, long delayMs) {
-        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+    private static void scheduleApplyWeChatFinderCurrentSpeed(android.app.Activity activity, String source, long... delays) {
+        long token = wxActivityTasks.next(activity);
+        java.lang.ref.WeakReference<android.app.Activity> reference = new java.lang.ref.WeakReference<>(activity);
+        android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+        for (long delay : delays) handler.postDelayed(() -> {
+            android.app.Activity current = reference.get();
+            if (!wxActivityTasks.isCurrent(current, token) || current.isFinishing() || current.isDestroyed()) return;
             try {
-                applyWeChatFinderCurrentSpeed(activity, source + " [" + activity.getClass().getSimpleName() + "]");
-            } catch (Throwable e) {
-                logWeChatHook("[FinderInject] " + source + " failed: " + e.getMessage());
+                applyWeChatFinderCurrentSpeed(current, source + " [" + current.getClass().getSimpleName() + "]");
+            } catch (Throwable error) {
+                logWeChatHook("[FinderInject] " + source + " failed: " + error);
             }
-        }, delayMs);
+        }, delay);
     }
 
     private static void applyWeChatFinderCurrentSpeed(android.app.Activity activity, String source) {
@@ -1332,8 +1430,8 @@ public class MainHook implements IXposedHookLoadPackage {
         if (Math.abs(targetSpeed - 1.0f) < 0.01f) {
             return;
         }
-        long manualAge = System.currentTimeMillis() - wxLastManualSpeedChangeAt;
-        if (manualAge >= 0 && manualAge < MANUAL_CHANGE_COOLDOWN) {
+        long manualAge = android.os.SystemClock.elapsedRealtime() - wxLastManualSpeedChangeAt;
+        if (wxLastManualSpeedChangeAt >= 0 && manualAge >= 0 && manualAge < MANUAL_CHANGE_COOLDOWN) {
             logWeChatHook("[FinderInject] " + source + " skipped in manual cooldown");
             return;
         }
@@ -1918,12 +2016,9 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 用于追踪每个播放器实例的最后设置速度，避免重复设置
-    private static final java.util.Map<Object, Float> lastSpeedMap = new java.util.concurrent.ConcurrentHashMap<>();
-    // 记录每个实例最后一次设置非1.0速度的时间，用于判断用户是否刚刚手动调整过
-    private static final java.util.Map<Object, Long> lastManualChangeTimeMap = new java.util.concurrent.ConcurrentHashMap<>();
-    // 判断间隔（毫秒）- 如果用户刚设置过自定义速度，短时间内不自动修改
+    // Weak player keys preserve manual choices without retaining released players.
     private static final long MANUAL_CHANGE_COOLDOWN = 3000L;
+    private static final ManualSpeedCooldown manualSpeedCooldown = new ManualSpeedCooldown(MANUAL_CHANGE_COOLDOWN);
     
     /**
      * 改进的速度判断逻辑 - 更智能的自动设置
@@ -1940,18 +2035,14 @@ public class MainHook implements IXposedHookLoadPackage {
             // 记录每次调用，便于调试
             logWeChatHook("[Proxy] " + source + " called with speed: " + speed + ", target: " + targetSpeed);
 
-            // 获取该实例的上次速度设置
-            Float lastSpeed = lastSpeedMap.get(playerInstance);
-            Long lastManualTime = lastManualChangeTimeMap.get(playerInstance);
-            long currentTime = System.currentTimeMillis();
+            long currentTime = android.os.SystemClock.elapsedRealtime();
             
             // 检查是否在用户手动修改的冷却期内
-            boolean inCooldown = lastManualTime != null && (currentTime - lastManualTime) < MANUAL_CHANGE_COOLDOWN;
+            boolean inCooldown = manualSpeedCooldown.isActive(playerInstance, currentTime);
             
             // 如果目标速度就是1.0，不需要做任何修改
             if (Math.abs(targetSpeed - 1.0f) < 0.01f) {
                 logWeChatHook("[Proxy] Target is 1.0x, no modification needed");
-                lastSpeedMap.put(playerInstance, speed);
                 return;
             }
             
@@ -1960,38 +2051,32 @@ public class MainHook implements IXposedHookLoadPackage {
                 // 检查是否是用户手动设置1.0
                 if (isManualSpeedChange()) {
                     logWeChatHook("[Proxy] User manually set to 1.0x, respecting");
-                    lastSpeedMap.put(playerInstance, speed);
-                    lastManualChangeTimeMap.put(playerInstance, currentTime);
+                    manualSpeedCooldown.record(playerInstance, currentTime);
                     return;
                 }
                 
                 // 在冷却期内不自动修改
                 if (inCooldown) {
                     logWeChatHook("[Proxy] In cooldown period, keeping: " + speed);
-                    lastSpeedMap.put(playerInstance, speed);
                     return;
                 }
                 
                 // 自动设置为目标速度
                 param.args[0] = targetSpeed;
-                lastSpeedMap.put(playerInstance, targetSpeed);
                 logWeChatHook("[Proxy] Auto speed set from " + source + ": " + targetSpeed);
             } 
             // 如果传入的速度不是1.0，说明是用户手动设置或已经被我们修改过
             else if (Math.abs(speed - targetSpeed) > 0.01f) {
                 if (isManualSpeedChange()) {
                     logWeChatHook("[Proxy] User custom speed detected: " + speed);
-                    lastSpeedMap.put(playerInstance, speed);
-                    lastManualChangeTimeMap.put(playerInstance, currentTime);
+                    manualSpeedCooldown.record(playerInstance, currentTime);
                 } else if (!inCooldown) {
                     param.args[0] = targetSpeed;
-                    lastSpeedMap.put(playerInstance, targetSpeed);
                     logWeChatHook("[Proxy] Init speed corrected from " + source + ": " + targetSpeed);
                 }
             } else {
                 // 速度已经是目标速度，正常通过
                 logWeChatHook("[Proxy] Speed already at target: " + speed);
-                lastSpeedMap.put(playerInstance, speed);
             }
         } catch (Exception e) {
             logWeChatHook("[Proxy] Error in speed change handler: " + e.getMessage());

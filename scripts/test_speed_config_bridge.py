@@ -12,9 +12,9 @@ public SharedPreferences getSharedPreferences(String name,int mode){calls++;last
 ''',
 'android/content/SharedPreferences.java': 'package android.content;public class SharedPreferences {public java.io.File mFile;}',
 'android/content/ContentResolver.java': '''package android.content;
-public class ContentResolver {public Float speed=3f;public boolean fail;public int queries;public String lastPackage;
+public class ContentResolver {public Float enabled=1f;public Float speed=3f;public boolean fail;public int queries;public String lastPackage;
 public java.util.Map<String,Float> perApp=new java.util.HashMap<>();
-public android.database.Cursor query(android.net.Uri u,String[] p,String a,String[] b,String c){queries++;lastPackage=u.packageName;if(fail)throw new IllegalStateException("provider failure");if(speed==null)return null;final float value=perApp.getOrDefault(u.packageName,speed);
+public android.database.Cursor query(android.net.Uri u,String[] p,String a,String[] b,String c){queries++;lastPackage=u.packageName;if(fail)throw new IllegalStateException("provider failure");if((p[0].equals("enabled")?enabled:speed)==null)return null;final float value=p[0].equals("enabled")?enabled:perApp.getOrDefault(u.packageName,speed);
 return new android.database.Cursor(){public boolean moveToFirst(){return true;}public float getFloat(int c){return value;}public int getColumnIndexOrThrow(String c){return 0;}public void close(){}};}}
 ''',
 'android/database/Cursor.java': 'package android.database;public interface Cursor extends AutoCloseable {boolean moveToFirst();float getFloat(int c);int getColumnIndexOrThrow(String c);void close();}',
@@ -22,11 +22,12 @@ return new android.database.Cursor(){public boolean moveToFirst(){return true;}p
 'android/util/Log.java': 'package android.util;public class Log {public static int w(String t,String m){return 0;}public static int w(String t,String m,Throwable e){return 0;}}',
 'de/robv/android/xposed/XSharedPreferences.java': '''package de.robv.android.xposed;
 public class XSharedPreferences {public float speed=1.25f;public boolean stored=true;public int reloads;public java.util.Map<String,Float> perApp=new java.util.HashMap<>();
-public void reload(){reloads++;}public float getFloat(String k,float f){return perApp.containsKey(k)?perApp.get(k):("speed".equals(k)&&stored?speed:f);}
+public java.util.Set<String> broken=new java.util.HashSet<>();
+public void reload(){reloads++;}public float getFloat(String k,float f){if(broken.contains(k))throw new ClassCastException("wrong preference type");return perApp.containsKey(k)?perApp.get(k):("speed".equals(k)&&stored?speed:f);}
 public boolean hasFileChanged(){return false;}public java.io.File getFile(){return new java.io.File("missing-test-speed.xml");}}
 ''',
 'de/robv/android/xposed/XposedBridge.java': 'package de.robv.android.xposed;public class XposedBridge {public static void log(String s){}}',
-'io/github/MarsGao/speed/SpeedConfigProvider.java': 'package io.github.MarsGao.speed;class SpeedConfigProvider {static final android.net.Uri SPEED_URI=android.net.Uri.parse("content://test/speed");static final String COLUMN_SPEED="speed";static android.net.Uri uriForPackage(String p){android.net.Uri u=android.net.Uri.parse("content://test/speed");u.packageName=p;return u;}}',
+'io/github/MarsGao/speed/SpeedConfigProvider.java': 'package io.github.MarsGao.speed;class SpeedConfigProvider {static final android.net.Uri SPEED_URI=android.net.Uri.parse("content://test/speed");static final String COLUMN_SPEED="speed",COLUMN_ENABLED="enabled";static android.net.Uri uriForPackage(String p){android.net.Uri u=android.net.Uri.parse("content://test/speed");u.packageName=p;return u;}}',
 'io/github/MarsGao/speed/BridgeTest.java': '''package io.github.MarsGao.speed;
 import android.content.*;import de.robv.android.xposed.*;
 public class BridgeTest {
@@ -81,6 +82,28 @@ check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.25f,"provider fallback resolves 
 check("com.phoenix.read".equals(app.resolver.lastPackage),"target package attached to provider request");
 SpeedConfigBridge.setTargetPackage(null);
 check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.5f,"legacy request without package remains global");
+SpeedConfigBridge.setTargetPackage("com.phoenix.read");
+prefs.stored=true;prefs.speed=2.2f;prefs.broken.add(SpeedSettings.appKey("com.phoenix.read"));
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==2.2f,"malformed reader override follows valid global");
+prefs.broken.add("speed");app.resolver.perApp.clear();app.resolver.speed=2.5f;
+check(SpeedConfigBridge.getSpeed(prefs,1.5f)==2.5f,"malformed reader preferences still query provider");
+app.resolver.speed=null;check(SpeedConfigBridge.getSpeed(prefs,1.5f)==1.5f,"both malformed values and missing provider safely fall back");
+prefs.broken.clear();
+prefs.stored=true;prefs.speed=2.25f;int reloadsBefore=prefs.reloads;
+check(SpeedConfigBridge.refreshSelectedSpeed(prefs,1.75f)==2.25f,"single snapshot refreshes selected default");
+check(prefs.reloads==reloadsBefore+1,"one preference reload per refresh");
+check(SpeedConfigBridge.refreshSelectedSpeed(prefs,1.75f)==1.75f,"unchanged config preserves native manual selection");
+prefs.perApp.put(SpeedSettings.enabledKey("com.phoenix.read"),0f);
+check(!SpeedConfigBridge.enabledAtStartup(prefs,"com.phoenix.read"),"disabled preference skips hook startup");
+prefs.perApp.put(SpeedSettings.enabledKey("com.phoenix.read"),1f);
+check(SpeedConfigBridge.enabledAtStartup(prefs,"com.phoenix.read"),"enabled preference restores hook startup");
+app.resolver.enabled=0f;app.resolver.speed=1.5f;
+check(!SpeedConfigBridge.enabledAtStartup(prefs,"com.kylin.read"),"startup switch queries enabled column when file flag unavailable");
+app.resolver.enabled=1f;
+check(SpeedConfigBridge.enabledAtStartup(prefs,"com.kylin.read"),"provider enabled flag restores compatible startup");
+app.resolver.fail=true;
+check(SpeedConfigBridge.enabledAtStartup(prefs,"com.kylin.read"),"unavailable setting keeps old enabled behavior");
+app.resolver.fail=false;
 Context module=new Context();check(SpeedPreferences.open(module)==module.prefs&&module.lastMode==1,"request framework-supported world-readable speed preference");
 module.rejectWorld=true;module.calls=0;check(SpeedPreferences.open(module)==module.prefs&&module.lastMode==0&&module.calls==2,"unhooked platform falls back to private mode");
 RecordingFile speed=new RecordingFile("/test/module/speed.xml");module.prefs.mFile=speed;SpeedPreferences.makeSpeedFileReadable(module.prefs);
