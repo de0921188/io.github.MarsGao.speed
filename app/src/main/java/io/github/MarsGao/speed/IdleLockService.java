@@ -7,7 +7,7 @@ import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
 
-/** Explicit, short-lived binding fallback when a host cannot acquire our Provider. */
+/** Foreground recovery endpoint and binding fallback for scoped host lock requests. */
 public class IdleLockService extends Service {
     private static volatile boolean running;
     static boolean isRunning() { return running; }
@@ -28,26 +28,18 @@ public class IdleLockService extends Service {
         Intent intent = new Intent(context, IdleLockService.class);
         try {
             if (enabled && !running) context.startForegroundService(intent);
-            else if (!enabled) context.stopService(intent);
+            else if (!enabled && running) {
+                // Serialize shutdown through onStartCommand. stopService can tear down
+                // an in-flight root startForegroundService before its start is delivered.
+                context.startService(intent);
+            }
         } catch (RuntimeException error) { android.util.Log.w("VideoSpeed", "Idle service startup unavailable", error); }
     }
 
     @Override public void onCreate() {
         super.onCreate();
         if (android.os.Build.VERSION.SDK_INT < 34) return;
-        android.app.NotificationManager manager = getSystemService(android.app.NotificationManager.class);
-        manager.createNotificationChannel(new android.app.NotificationChannel("idle_lock", getString(R.string.idle_title),
-                android.app.NotificationManager.IMPORTANCE_LOW));
-        android.app.PendingIntent settings = android.app.PendingIntent.getActivity(this, 0,
-                new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
-        startForeground(42, new android.app.Notification.Builder(this, "idle_lock")
-                .setSmallIcon(android.R.drawable.ic_lock_idle_lock).setContentTitle(getString(R.string.idle_title))
-                .setContentText(getString(R.string.idle_service_running)).setContentIntent(settings)
-                .addAction(0,getString(R.string.notification_pause), android.app.PendingIntent.getBroadcast(this,43,
-                        new Intent(this,TimerActionReceiver.class).setAction("pause"),android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
-                .addAction(0,getString(R.string.notification_resume), android.app.PendingIntent.getBroadcast(this,44,
-                        new Intent(this,TimerActionReceiver.class).setAction("resume"),android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
-                .setOngoing(true).build());
+        promoteToForeground();
         receiver = new android.content.BroadcastReceiver() {
             @Override public void onReceive(android.content.Context context, Intent intent) {
                 final int uid = IdleLockChannel.senderUid(this);
@@ -65,12 +57,39 @@ public class IdleLockService extends Service {
         running = true;
     }
 
+    private void promoteToForeground() {
+        android.app.NotificationManager manager = getSystemService(android.app.NotificationManager.class);
+        manager.createNotificationChannel(new android.app.NotificationChannel("idle_lock", getString(R.string.idle_title),
+                android.app.NotificationManager.IMPORTANCE_LOW));
+        android.app.PendingIntent settings = android.app.PendingIntent.getActivity(this, 0,
+                new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+        startForeground(42, new android.app.Notification.Builder(this, "idle_lock")
+                .setSmallIcon(android.R.drawable.ic_lock_idle_lock).setContentTitle(getString(R.string.idle_title))
+                .setContentText(getString(R.string.idle_service_running)).setContentIntent(settings)
+                .addAction(0,getString(R.string.notification_pause), android.app.PendingIntent.getBroadcast(this,43,
+                        new Intent(this,TimerActionReceiver.class).setAction("pause"),android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
+                .addAction(0,getString(R.string.notification_resume), android.app.PendingIntent.getBroadcast(this,44,
+                        new Intent(this,TimerActionReceiver.class).setAction("resume"),android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT))
+                .setOngoing(true).build());
+    }
+
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        // Every foreground start has its own promotion obligation, including a
+        // late recovery request after the user disabled the feature. Creation
+        // alone is insufficient when the service instance already exists.
+        promoteToForeground();
         if (!(SpeedSettings.idleEnabled(SpeedPreferences.open(this)::getFloat) || TimerControls.sleeping(this)) || !IdleLockRoot.active(this)) {
-            stopSelf();
+            recoveryHandler.removeCallbacks(pulse);
+            if (stopSelfResult(startId)) {
+                running = false;
+                // Binding clients may keep the instance alive after its started
+                // lifetime ends. Do not leave an inactive foreground notification.
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            }
             IdleLockRecovery.sync(this, false);
             return START_NOT_STICKY;
         }
+        running = true;
         IdleLockRecovery.sync(this, true);
         recoveryHandler.removeCallbacks(pulse);
         recoveryHandler.post(pulse);

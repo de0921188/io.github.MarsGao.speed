@@ -355,11 +355,12 @@ public Intent putExtra(String k,long v){extras.put(k,v);return this;}public Inte
 public String getStringExtra(String k){return (String)extras.get(k);}
 public long getLongExtra(String k,long f){return extras.containsKey(k)?(long)extras.get(k):f;}}
 '''
+SOURCES['android/content/Context.java'] = SOURCES['android/content/Context.java'].replace('public class Context {', 'public class Context {public void startService(android.content.Intent i){}')
 SOURCES['android/app/Service.java'] = '''package android.app;public abstract class Service extends android.content.Context {
-public static final int START_STICKY=1,START_NOT_STICKY=2;public boolean foreground,stopped;
+public static final int START_STICKY=1,START_NOT_STICKY=2,STOP_FOREGROUND_REMOVE=1;public boolean foreground,stopped;
 public abstract android.os.IBinder onBind(android.content.Intent i);public void onCreate(){}
 public void onDestroy(){}public int onStartCommand(android.content.Intent i,int f,int s){return 0;}
-public void stopSelf(){stopped=true;}public void startForeground(int id,Notification n){foreground=true;}}'''
+public void stopForeground(int flags){foreground=false;}public void stopSelf(){stopped=true;}public boolean stopSelfResult(int id){stopped=true;return true;}public void startForeground(int id,Notification n){foreground=true;}}'''
 SOURCES['android/content/Context.java'] = SOURCES['android/content/Context.java'].replace('BIND_AUTO_CREATE=1,', 'RECEIVER_EXPORTED=2,BIND_AUTO_CREATE=1,').replace(
     'public SharedPreferences getSharedPreferences', '''public static BroadcastReceiver receiver;public static Context receiverContext;
 public int starts,stops;public String getString(int id){return "idle";}
